@@ -1,0 +1,455 @@
+---
+title: "Single-Barrier Quantum Tunneling with QuTiP"
+format: html
+execute:
+  echo: true
+  warning: true
+  error: true
+---
+
+
+# Single-Barrier Quantum Tunneling with QuTiP
+
+This notebook implements a reproducible QuTiP-based finite-difference time-dependent simulation
+of a Gaussian wave packet scattering from a single square barrier. It reuses algorithms and
+conventions from qptr_9.qmd and qptr_10.qmd in this repository; where necessary, helper functions
+are adapted locally and clearly annotated.
+
+
+```{python}
+# Parameters block: physical constants and default simulation parameters
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+import os
+import pandas as pd
+from qutip import Qobj, sesolve, expect
+
+# Physical constants (SI)
+hbar = 1.054571817e-34  # J*s
+m_e = 9.1093837015e-31  # electron mass (kg) - default particle mass
+
+# Simulation parameters (changeable)
+params = {
+    'm': m_e,
+    'hbar': hbar,
+    'x_min': -200e-9,   # meters
+    'x_max': 200e-9,    # meters
+    'N': 2048,          # number of grid points (can change for convergence)
+    'V0': 0.5 * 1.602176634e-19,  # barrier height in Joules (0.5 eV default)
+    'a': 20e-9,         # barrier width (meters)
+    'barrier_center': 0.0,  # center position of barrier (meters)
+    'x0': -100e-9,      # initial packet center (meters)
+    'sigma_x': 5e-9,    # spatial width (meters)
+    'k0': 5e8,          # wave number (1/m). Set to get desired E0
+    't_steps': 400      # number of time steps for evolution
+}
+
+# Create figures directory
+os.makedirs('figures', exist_ok=True)
+
+# Print parameters
+for k,v in params.items():
+    print(f"{k}: {v}")
+```
+
+
+## Helper functions (adapted from qptr_9 and qptr_10)
+
+```{python}
+# Build spatial grid
+def build_grid(x_min, x_max, N):
+    x = np.linspace(x_min, x_max, N)
+    dx = x[1] - x[0]
+    return x, dx
+
+# Square barrier potential
+def square_barrier_potential(x, V0, a, center=0.0):
+    x1 = center - a/2
+    x2 = center + a/2
+    V = np.zeros_like(x)
+    mask = (x >= x1) & (x <= x2)
+    V[mask] = V0
+    return V
+
+# Second-derivative operator (central difference) as sparse matrix
+# Adapted from qptr_10: D2 / dx^2 representation with Dirichlet boundary conditions (zeros at endpoints)
+from scipy.sparse import diags
+
+def second_derivative_matrix(N, dx):
+    main = -2.0 * np.ones(N)
+    off = 1.0 * np.ones(N-1)
+    diagonals = [off, main, off]
+    D2 = diags(diagonals, offsets=[-1,0,1], shape=(N,N), format='csr')
+    return D2 / (dx**2)
+
+# Kinetic operator matrix (in SI units)
+def kinetic_operator(hbar, m, N, dx):
+    D2 = second_derivative_matrix(N, dx)
+    T = - (hbar**2) / (2.0 * m) * D2
+    return T
+
+# Potential operator as diagonal sparse matrix
+def potential_operator(V):
+    return diags(V, 0, format='csr')
+
+# Convert grid wavefunction psi(x) to a QuTiP ket (Qobj) with proper normalization
+# We follow the convention that sum(|psi|^2)*dx = 1; the corresponding discrete vector
+# used as a state vector in QuTiP must satisfy sum(|c|^2) = 1. Therefore we multiply
+# psi(x) by sqrt(dx) to create the state vector coefficients.
+def ket_from_psi(psi_x, dx):
+    coeffs = psi_x * np.sqrt(dx)
+    # Ensure complex dtype
+    coeffs = np.asarray(coeffs, dtype=complex)
+    return Qobj(coeffs)
+
+# Recover psi(x) from QuTiP ket (divide by sqrt(dx))
+def psi_from_ket(ket, dx):
+    coeffs = ket.full().ravel()
+    psi_x = coeffs / np.sqrt(dx)
+    return psi_x
+
+# Normalize psi on grid numerically: enforce integral |psi|^2 dx = 1
+def normalize_on_grid(psi_x, dx):
+    norm = np.sum(np.abs(psi_x)**2) * dx
+    if norm == 0:
+        raise ValueError('Zero norm encountered in normalize_on_grid')
+    return psi_x / np.sqrt(norm), norm
+
+# Gaussian wave packet initial condition (as specified in project)
+def gaussian_wavepacket(x, x0, sigma_x, k0):
+    # psi(x,0) = A exp[-(x-x0)^2/(4 sigma_x^2)] exp(i k0 x)
+    psi = np.exp(- (x - x0)**2 / (4.0 * sigma_x**2)) * np.exp(1j * k0 * x)
+    # Note: normalization applied separately
+    return psi
+
+# Compute spatial integrals for left/right region
+def integrate_region_prob(psi_x, x, region_mask, dx):
+    return np.sum(np.abs(psi_x[region_mask])**2) * dx
+
+# Hermiticity diagnostic: ||H - H.dag()||_max (infinity norm approximation)
+import numpy.linalg as la
+
+def hermiticity_norm(H):
+    # H is a scipy.sparse matrix or Qobj
+    if isinstance(H, Qobj):
+        Hm = H
+        Hmat = H.full()
+    else:
+        Hmat = H.toarray() if sp.issparse(H) else np.array(H)
+        Hm = Qobj(Hmat)
+    diff = Hmat - Hmat.conj().T
+    return la.norm(diff, ord=np.inf)
+```
+
+
+## Stage A: Assemble Hamiltonian and initial state
+
+```{python}
+# Unpack parameters
+m = params['m']
+hbar = params['hbar']
+x_min = params['x_min']
+x_max = params['x_max']
+N = params['N']
+V0 = params['V0']
+a = params['a']
+center = params['barrier_center']
+x0 = params['x0']
+sigma_x = params['sigma_x']
+k0 = params['k0']
+
+# Build grid and potential
+x, dx = build_grid(x_min, x_max, N)
+V_x = square_barrier_potential(x, V0, a, center=center)
+
+# Build operators
+T_mat = kinetic_operator(hbar, m, N, dx)
+V_mat = potential_operator(V_x)
+H_mat = T_mat + V_mat
+
+# Convert to QuTiP Qobj
+H_qobj = Qobj(H_mat)
+
+print(f"Grid: N={N}, dx={dx} m")
+print(f"Barrier: V0={V0} J ({V0/1.602176634e-19} eV), a={a} m, center={center} m")
+
+# Hermiticity check
+herm_norm = hermiticity_norm(H_qobj)
+print(f"Hermiticity diagnostic ||H - H^dagger||_inf = {herm_norm:.3e}")
+
+# Initial Gaussian packet and normalization
+psi0 = gaussian_wavepacket(x, x0, sigma_x, k0)
+psi0, norm0 = normalize_on_grid(psi0, dx)
+ket0 = ket_from_psi(psi0, dx)
+
+# Compute p0 and E0
+p0 = hbar * k0
+E0 = (hbar**2 * k0**2) / (2.0 * m)
+
+print(f"Initial wave-packet normalization (before renorm): {norm0:.6e}")
+print(f"p0 = {p0:.6e} kg m/s")
+print(f"E0 = {E0:.6e} J = {E0/1.602176634e-19:.6f} eV")
+
+# Confirm ket normalization in QuTiP conventions
+ket_norm = ket0.norm()
+print(f"QuTiP ket norm (should be ~1): {ket_norm:.6e}")
+
+# Save initial psi plot
+plt.figure(figsize=(8,4))
+plt.plot(x*1e9, np.abs(psi0)**2, label=r'$|\psi(x,0)|^2$')
+plt.plot(x*1e9, V_x / V0 * np.max(np.abs(psi0)**2), '--', label='Barrier (scaled)')
+plt.xlabel('x (nm)')
+plt.ylabel(r'$|\psi|^2$ (a.u.)')
+plt.title('Initial Gaussian wave packet and barrier (scaled)')
+plt.legend()
+plt.tight_layout()
+plt.savefig('figures/single_barrier_wavepacket_initial.png', dpi=200)
+plt.show()
+```
+
+
+## Time evolution: choose t_final based on group velocity and domain
+
+```{python}
+# Estimate group velocity v = p0 / m
+v = p0 / m
+print(f"Estimated group velocity v = {v:.3e} m/s")
+
+# Estimate times needed: time to travel from x0 to well-right-edge and beyond
+x_right_far = x_max - (x_max - center) * 0.1
+# distance from x0 to right far region
+dist_to_right = x_right_far - x0
+if v <= 0:
+    raise ValueError('Non-positive group velocity for given k0; choose k0>0')
+travel_time = dist_to_right / v
+print(f"Estimated travel time to right far region = {travel_time:.3e} s")
+
+# Choose t_final as multiple of travel_time to allow interaction and separation
+t_final = 1.2 * travel_time
+n_t = params['t_steps']
+
+# Create time grid
+tlist = np.linspace(0.0, t_final, n_t)
+print(f"t_final = {t_final:.3e} s with {n_t} steps")
+
+# Evolve using QuTiP sesolve
+result = sesolve(H_qobj, ket0, tlist)
+
+# Extract psi(x,t) at selected snapshot indices
+snap_indices = [0, int(0.25*(n_t-1)), int(0.5*(n_t-1)), int(0.75*(n_t-1)), n_t-1]
+
+fig, axes = plt.subplots(len(snap_indices), 1, figsize=(8, 3*len(snap_indices)), sharex=True)
+for ax, idx in zip(axes, snap_indices):
+    ket_t = result.states[idx]
+    psi_t = psi_from_ket(ket_t, dx)
+    ax.plot(x*1e9, np.abs(psi_t)**2, color='C0')
+    ax.plot(x*1e9, V_x / V0 * np.max(np.abs(psi_t)**2), '--', color='C3', label='Barrier (scaled)')
+    ax.set_ylabel(r'$|\psi(x,t)|^2$ (a.u.)')
+    ax.legend()
+axes[-1].set_xlabel('x (nm)')
+plt.suptitle('Snapshots of |psi(x,t)|^2 during scattering')
+plt.tight_layout(rect=[0,0,1,0.97])
+plt.savefig('figures/single_barrier_wavepacket.png', dpi=200)
+plt.show()
+```
+
+
+## Transmission and reflection computation at final time
+
+```{python}
+# Define left and right integration regions
+# Exclude a region of width equal to the barrier +/- a margin
+margin = 10 * sigma_x
+left_region = x < (center - a/2 - margin)
+right_region = x > (center + a/2 + margin)
+middle_region = ~(left_region | right_region)
+
+psi_final = psi_from_ket(result.states[-1], dx)
+
+R = integrate_region_prob(psi_final, x, left_region, dx)
+T = integrate_region_prob(psi_final, x, right_region, dx)
+P_total = np.sum(np.abs(psi_final)**2) * dx
+
+print(f"Reflection R = {R:.6e}")
+print(f"Transmission T = {T:.6e}")
+print(f"R + T = {R + T:.6e}")
+print(f"Total probability in box P_total = {P_total:.6e}")
+
+# Save numeric results to a small DataFrame
+results = pd.DataFrame({
+    'parameter': ['E0_J', 'E0_eV', 'V0_J', 'V0_eV', 'a_m', 'R', 'T', 'R+T', 'P_total'],
+    'value': [E0, E0/1.602176634e-19, V0, V0/1.602176634e-19, a, R, T, R+T, P_total]
+})
+results
+```
+
+
+## Stage B: Validation checks
+
+### B1. Normalization checks
+
+```{python}
+# Initial normalization (should be 1 by construction)
+psi0_from_ket = psi_from_ket(ket0, dx)
+init_norm = np.sum(np.abs(psi0_from_ket)**2) * dx
+print(f"Initial norm from ket: {init_norm:.6e}")
+
+# Final normalization
+final_norm = np.sum(np.abs(psi_final)**2) * dx
+print(f"Final norm: {final_norm:.6e}")
+
+# Norm as function of time
+norms = []
+for st in result.states:
+    psi_t = psi_from_ket(st, dx)
+    norms.append(np.sum(np.abs(psi_t)**2) * dx)
+
+plt.figure(figsize=(6,4))
+plt.plot(tlist, norms)
+plt.xlabel('t (s)')
+plt.ylabel('Total probability')
+plt.title('Norm conservation over time')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('figures/single_barrier_norm.png', dpi=200)
+plt.show()
+```
+
+
+### B2. Hermiticity was checked earlier; report with tolerance
+
+```{python}
+tol_herm = 1e-12
+status_herm = 'PASS' if hermiticity_norm(H_qobj) < 1e-9 else 'WARN'
+print(f"Hermiticity check: norm = {herm_norm:.3e}, status = {status_herm}")
+```
+
+
+### B4. R+T convergence with time (run for several t_final choices)
+
+```{python}
+# Function to run simulation and return R,T,P_total for a chosen t_final_nfactor
+def run_until_time_factor(tfactor, n_t=300):
+    # recompute t_final as tfactor * travel_time
+    t_f = tfactor * travel_time
+    tlist_local = np.linspace(0.0, t_f, n_t)
+    res_local = sesolve(H_qobj, ket0, tlist_local)
+    psi_last = psi_from_ket(res_local.states[-1], dx)
+    R_local = integrate_region_prob(psi_last, x, left_region, dx)
+    T_local = integrate_region_prob(psi_last, x, right_region, dx)
+    P_local = np.sum(np.abs(psi_last)**2) * dx
+    return {'t_final': t_f, 'R': R_local, 'T': T_local, 'R+T': R_local + T_local, 'norm': P_local}
+
+factors = [0.8, 1.0, 1.2, 1.5]
+conv_rows = []
+for f in factors:
+    row = run_until_time_factor(f, n_t=200)
+    conv_rows.append(row)
+
+conv_df = pd.DataFrame(conv_rows)
+conv_df
+
+# Save table
+conv_df.to_csv('figures/single_barrier_time_convergence_table.csv', index=False)
+```
+
+
+### B5. Grid convergence
+
+```{python}
+# Vary N while keeping x_min/x_max fixed
+Ns = [1024, 2048, 4096]
+grid_rows = []
+for Ntest in Ns:
+    x_test, dx_test = build_grid(x_min, x_max, Ntest)
+    V_x_test = square_barrier_potential(x_test, V0, a, center=center)
+    T_mat_test = -(hbar**2)/(2.0*m) * second_derivative_matrix(Ntest, dx_test)
+    V_mat_test = diags(V_x_test, 0, format='csr')
+    H_mat_test = T_mat_test + V_mat_test
+    H_qobj_test = Qobj(H_mat_test)
+    # build initial psi on this grid
+    psi0_test = gaussian_wavepacket(x_test, x0, sigma_x, k0)
+    psi0_test, _ = normalize_on_grid(psi0_test, dx_test)
+    ket0_test = ket_from_psi(psi0_test, dx_test)
+    # choose t_final scaled accordingly
+    # recompute travel_time for this grid (same physical distances)
+    dist_to_right_test = x_test[-1] - x0 * 1.0
+    travel_time_test = (x_max*0.9 - x0) / v
+    t_final_test = 1.2 * travel_time_test
+    tlist_test = np.linspace(0.0, t_final_test, 200)
+    res_test = sesolve(H_qobj_test, ket0_test, tlist_test)
+    psi_last_test = psi_from_ket(res_test.states[-1], dx_test)
+    left_test = x_test < (center - a/2 - margin)
+    right_test = x_test > (center + a/2 + margin)
+    R_test = np.sum(np.abs(psi_last_test[left_test])**2) * dx_test
+    T_test = np.sum(np.abs(psi_last_test[right_test])**2) * dx_test
+    P_test = np.sum(np.abs(psi_last_test)**2) * dx_test
+    grid_rows.append({'N': Ntest, 'dx': dx_test, 'R': R_test, 'T': T_test, 'R+T': R_test+T_test, 'norm': P_test})
+
+grid_df = pd.DataFrame(grid_rows)
+grid_df
+
+# Plot T vs dx
+plt.figure(figsize=(6,4))
+plt.plot(grid_df['dx']*1e9, grid_df['T'], 'o-')
+plt.xlabel('dx (nm)')
+plt.ylabel('Transmission T')
+plt.title('Grid convergence of Transmission')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('figures/single_barrier_grid_convergence.png', dpi=200)
+plt.show()
+```
+
+
+### B6. Boundary effects
+
+```{python}
+# Estimate time for reflections from boundaries to return: distance from packet center to boundary / v
+# We will compute round-trip time from barrier region to nearest boundary and back
+left_boundary = x_min
+right_boundary = x_max
+# distance to nearest boundary from barrier region
+dist_to_left_boundary = (center - a/2) - left_boundary
+dist_to_right_boundary = right_boundary - (center + a/2)
+round_trip_left = 2.0 * dist_to_left_boundary / v
+round_trip_right = 2.0 * dist_to_right_boundary / v
+print(f"Round-trip time to left boundary and back: {round_trip_left:.3e} s")
+print(f"Round-trip time to right boundary and back: {round_trip_right:.3e} s")
+print(f"Selected t_final = {t_final:.3e} s; ensure it is less than shorter round-trip time to avoid boundary reflections returning")
+
+boundary_effects_ok = t_final < min(round_trip_left, round_trip_right)
+print(f"Boundary effects negligible for selected t_final? {boundary_effects_ok}")
+
+if not boundary_effects_ok:
+    print('Consider increasing the spatial box or reducing t_final. Alternatively, implement absorbing boundaries (not implemented by default).')
+```
+
+
+## Validation summary table
+
+```{python}
+checks = [
+    {'Check': 'Initial normalization', 'Result': float(init_norm), 'Status': 'PASS' if abs(init_norm-1.0)<1e-6 else 'WARN'},
+    {'Check': 'Final normalization', 'Result': float(final_norm), 'Status': 'PASS' if abs(final_norm-1.0)<1e-3 else 'WARN'},
+    {'Check': 'Hamiltonian Hermiticity', 'Result': float(herm_norm), 'Status': 'PASS' if hermiticity_norm(H_qobj)<1e-9 else 'WARN'},
+    {'Check': 'Norm conservation (time series)', 'Result': float(np.max(np.abs(np.array(norms)-1.0))), 'Status': 'PASS' if np.max(np.abs(np.array(norms)-1.0))<1e-3 else 'WARN'},
+    {'Check': 'R+T (final)', 'Result': float(R+T), 'Status': 'PASS' if abs((R+T)-1.0)<5e-2 else 'WARN'},
+    {'Check': 'Time convergence (see table)', 'Result': 'See figures/single_barrier_time_convergence_table.csv', 'Status': 'MANUAL'},
+    {'Check': 'Grid convergence (see figure)', 'Result': 'See figures/single_barrier_grid_convergence.png', 'Status': 'MANUAL'},
+    {'Check': 'Boundary effects', 'Result': f't_final<{min(round_trip_left, round_trip_right)}', 'Status': 'PASS' if boundary_effects_ok else 'WARN'}
+]
+
+validation_df = pd.DataFrame(checks)
+validation_df
+
+# Save validation summary
+validation_df.to_csv('figures/single_barrier_validation_summary.csv', index=False)
+```
+
+
+# End of notebook
+
+
