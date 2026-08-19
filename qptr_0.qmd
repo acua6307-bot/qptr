@@ -1,0 +1,368 @@
+---
+title: "Lecture 0"
+format: html
+editor: visual
+---
+
+```{r,echo=FALSE,eval=TRUE,message=FALSE}
+library(reticulate)
+
+use_virtualenv("~/.virtualenvs/r-reticulate", required = TRUE)
+
+#py_config()
+```
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+from IPython.display import HTML, Image
+from scipy.special import airy
+from qutip import (Qobj, about, basis, coherent, coherent_dm, create, destroy,
+                   expect, fock, fock_dm, mesolve, qeye, sigmax, sigmay,
+                   sigmaz, tensor, thermal_dm, anim_matrix_histogram,
+                   anim_fock_distribution)
+# set a parameter to see animations in line
+from matplotlib import rc
+rc('animation', html='jshtml')
+```
+
+## Creating and inspecting quantum objects
+
+```{python}
+q = Qobj([[1], [0]])
+q
+```
+
+```{python}
+# the dimension, or composite Hilbert state space structure
+q.dims
+```
+
+```{python}
+# the shape of the matrix data representation
+q.shape
+```
+
+```{python}
+# the matrix data itself. in sparse matrix format.
+q.data
+```
+
+```{python}
+# get the dense matrix representation
+q.full()
+```
+
+```{python}
+# some additional properties
+q.isherm, q.type
+```
+
+## Using $\texttt{Qobj}$\$\\texttt{Qobj}\$ instances for calculations
+
+```{python}
+sy = Qobj([[0, -1j], [1j, 0]])  # the sigma-y Pauli operator
+sy
+```
+
+```{python}
+sz = Qobj([[1, 0], [0, -1]])  # the sigma-z Pauli operator
+sz
+```
+
+```{python}
+# some arithmetic with quantum objects
+H = 1.0 * sz + 0.1 * sy
+print("Qubit Hamiltonian = \n")
+H
+```
+
+```{python}
+# The hermitian conjugate
+sy.dag()
+```
+
+```{python}
+# The trace
+H.tr()
+```
+
+```{python}
+# Eigen energies
+H.eigenenergies()
+```
+
+## States and operators
+
+### State vectors
+
+```{python}
+# Fundamental basis states (Fock states of oscillator modes)
+N = 2  # number of states in the Hilbert space
+n = 1  # the state that will be occupied
+basis(N, n)  # equivalent to fock(N, n)
+```
+
+```{python}
+fock(16, 2)  # another example
+```
+
+```{python}
+# a coherent state
+coherent(N=10, alpha=1.0)
+```
+
+### Density matrices
+
+```{python}
+# a fock state as density matrix
+fock_dm(5, 2)  # 5 = hilbert space size, 2 = state that is occupied
+```
+
+```{python}
+# coherent state as density matrix
+coherent_dm(N=5, alpha=1.0)
+```
+
+```{python}
+# thermal state
+n = 5  # average number of thermal photons
+thermal_dm(5, n)
+```
+
+### Operators
+
+#### Qubit (two-level system) operators
+
+```{python}
+# Pauli sigma x
+sigmax()
+```
+
+```{python}
+# Pauli sigma y
+sigmay()
+```
+
+```{python}
+# Pauli sigma z
+sigmaz()
+```
+
+#### Harmonic oscillator operators
+
+```{python}
+#  annihilation operator
+destroy(N=5)  # N = number of fock states included in the Hilbert space
+```
+
+```{python}
+# creation operator
+create(N=5)  # equivalent to destroy(5).dag()
+```
+
+```{python}
+# the position operator is easily constructed from the annihilation operator
+a = destroy(5)
+x = a + a.dag()
+x
+```
+
+#### Using %\texttt{Qobj}\$ instances we can check some well known commutation relations:
+
+```{python}
+def commutator(op1, op2):
+    return op1 * op2 - op2 * op1
+```
+
+```{python}
+a = destroy(5)
+commutator(a, a.dag())
+```
+
+```{python}
+x = (a + a.dag()) / np.sqrt(2)
+p = -1j * (a - a.dag()) / np.sqrt(2)
+commutator(x, p)
+```
+
+```{python}
+commutator(sigmax(), sigmay()) - 2j * sigmaz()
+```
+
+```{python}
+-1j * sigmax() * sigmay() * sigmaz()
+```
+
+```{python}
+sigmax() ** 2 == sigmay() ** 2 == sigmaz() ** 2 == qeye(2)
+```
+
+### Composite systems
+
+```{python}
+sz1 = tensor(sigmaz(), qeye(2))
+sz1
+```
+
+```{python}
+psi1 = tensor(basis(N, 1), basis(N, 0))  # excited first qubit
+psi2 = tensor(basis(N, 0), basis(N, 1))  # excited second qubit
+```
+
+```{python}
+print(sz1.dims)
+print(psi1.dims)
+```
+
+```{python}
+# this should not be true,
+# because sz1 should flip the sign of the excited state of psi1
+sz1 * psi1 == psi1
+```
+
+```{python}
+# this should be true, because sz1 should leave psi2 unaffected
+sz1 * psi2 == psi2
+```
+
+```{python}
+sz2 = tensor(qeye(2), sigmaz())
+sz2
+```
+
+```{python}
+tensor(sigmax(), sigmax())
+```
+
+```{python}
+epsilon = [1.0, 1.0]
+g = 0.1
+sz1 = tensor(sigmaz(), qeye(2))
+sz2 = tensor(qeye(2), sigmaz())
+H = epsilon[0] * sz1 + epsilon[1] * sz2 + g * tensor(sigmax(), sigmax())
+H
+```
+
+```{python}
+wc = 1.0  # cavity frequency
+wa = 1.0  # qubit/atom frenqency
+g = 0.1  # coupling strength
+# cavity mode operator
+a = tensor(destroy(5), qeye(2))
+# qubit/atom operators
+sz = tensor(qeye(5), sigmaz())  # sigma-z operator
+sm = tensor(qeye(5), destroy(2))  # sigma-minus operator
+# the Jaynes-Cumming Hamiltonian
+H = wc * a.dag() * a - 0.5 * wa * sz + g * (a * sm.dag() + a.dag() * sm)
+H
+```
+
+```{python}
+a = tensor(destroy(3), qeye(2))
+sp = tensor(qeye(3), create(2))
+a * sp
+```
+
+```{python}
+tensor(destroy(3), create(2))
+```
+
+### Unitary dynamics
+
+```{python}
+# Hamiltonian
+H = sigmax()
+# initial state
+psi0 = basis(2, 0)
+# list of times for which the solver should store the state vector
+tlist = np.linspace(0, 10, 100)
+result = mesolve(H, psi0, tlist, [])
+result
+```
+
+```{python}
+len(result.states)
+```
+
+```{python}
+result.states[-1]  # the finial state
+```
+
+```{python}
+fig, ani = anim_matrix_histogram(result, limits=[0, 1],
+                                 bar_style='abs', color_style='phase')
+# close an auto-generated plot and animation
+plt.close()
+ani
+```
+
+### Expectation values
+
+```{python}
+expect(sigmaz(), result.states[-1])
+```
+
+```{python}
+expect(sigmaz(), result.states)
+```
+
+```{python}
+fig, axes = plt.subplots(1, 1)
+axes.plot(tlist, expect(sigmaz(), result.states))
+axes.set_xlabel(r"$t$", fontsize=20)
+axes.set_ylabel(r"$\left<\sigma_z\right>$", fontsize=20);
+```
+
+```{python}
+result = mesolve(H, psi0, tlist, [], e_ops=[sigmax(), sigmay(), sigmaz()])
+```
+
+```{python}
+fig, axes = plt.subplots(1, 1)
+axes.plot(tlist, result.expect[2], label=r"$\left<\sigma_z\right>$")
+axes.plot(tlist, result.expect[1], label=r"$\left<\sigma_y\right>$")
+axes.plot(tlist, result.expect[0], label=r"$\left<\sigma_x\right>$")
+axes.set_xlabel(r"$t$", fontsize=20)
+axes.legend(loc=2);
+```
+
+### Dissipative dynamics
+
+```{python}
+w = 1.0  # oscillator frequency
+kappa = 0.1  # relaxation rate
+a = destroy(10)  # oscillator annihilation operator
+rho0 = fock_dm(10, 5)  # initial state, fock state with 5 photons
+H = w * a.dag() * a  # Hamiltonian
+# A list of collapse operators
+c_ops = [np.sqrt(kappa) * a]
+```
+
+```{python}
+tlist = np.linspace(0, 50, 100)
+# request that the solver return the expectation value
+# of the photon number state operator a.dag() * a
+result = mesolve(H, rho0, tlist, c_ops, e_ops=[a.dag() * a],
+                 options={"store_states": True})
+```
+
+```{python}
+fig, axes = plt.subplots(1, 1)
+axes.plot(tlist, result.expect[0])
+axes.set_xlabel(r"$t$", fontsize=20)
+axes.set_ylabel(r"Photon number", fontsize=16);
+```
+
+```{python}
+fig, ani = anim_fock_distribution(result)
+# close an auto-generated plot and animation
+plt.close()
+ani
+```
+
+## Installation information
+
+```{python}
+about()
+```

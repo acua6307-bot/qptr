@@ -1,0 +1,862 @@
+---
+title: "Harmonic Oscillator, Fock States and Coherent States"
+format: pdf
+editor: visual
+---
+
+## Step 0 – Imports, constants, units and QuTiP setup
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from math import factorial
+
+try:
+    import qutip as qt
+except ImportError as exc:
+    raise ImportError(
+        "QuTiP is required for this notebook. Install with: pip install qutip"
+    ) from exc
+
+# Physical constants in SI units
+hbar = 1.054_571_817e-34       # J s
+m_e = 9.109_383_7015e-31       # kg
+eV_to_J = 1.602_176_634e-19    # J/eV
+
+# Physical oscillator choice
+# We choose a microscopic oscillator with energy spacing hbar*omega = 0.10 eV.
+m = m_e
+energy_spacing_eV = 0.10
+energy_spacing_J = energy_spacing_eV * eV_to_J
+omega = energy_spacing_J / hbar
+
+# Hilbert-space truncation
+N = 40
+
+# Useful arrays and physical scales
+n_values = np.arange(N)
+x_zpf = np.sqrt(hbar / (2 * m * omega))   # zero-point position scale, meters
+p_zpf = np.sqrt(m * hbar * omega / 2)     # zero-point momentum scale, kg m/s
+x_osc = np.sqrt(hbar / (m * omega))       # oscillator length scale, meters
+period = 2 * np.pi / omega                # seconds
+
+print("QuTiP version:", qt.__version__)
+print("Physical parameters")
+print("-------------------")
+print(f"hbar = {hbar:.6e} J s")
+print(f"m = m_e = {m:.6e} kg")
+print(f"hbar*omega = {energy_spacing_eV:.4f} eV")
+print(f"omega = {omega:.6e} rad/s")
+print(f"period ={period*1e15:.3f} fs")
+print(f"x_zpf = {x_zpf*1e9:.4f} nm")
+print(f"x_osc = {x_osc*1e9:.4f} nm")
+print(f"p_zpf = {p_zpf:.6e} kg m/s")
+print(f"Truncated Fock basis dimension: N = {N}")
+```
+
+## Step 1 – Harmonic oscillator energy spectrum
+
+```{python}
+n_plot = np.arange(0, 10)
+E_n_J = hbar * omega * (n_plot + 0.5)
+E_n_eV = E_n_J / eV_to_J
+
+plt.figure(figsize=(7, 4))
+for n, E in zip(n_plot, E_n_eV):
+    plt.hlines(E, xmin=-0.4, xmax=0.4)
+    plt.text(0.48, E, rf"$n={n}$, $E_{n}={E:.2f}$ eV", va="center")
+
+plt.xlim(-0.6, 2.8)
+plt.ylim(0, E_n_eV[-1] + 0.15)
+plt.xticks([])
+plt.ylabel(r"Energy $E_n$ (eV)")
+plt.title("Energy levels of the quantum harmonic oscillator")
+plt.grid(True, axis="y", alpha=0.3)
+plt.show()
+```
+
+## Step 2 – Fock basis in QuTiP
+
+```{python}
+# Construct a few Fock states
+ket0 = qt.basis(N, 0)
+ket1 = qt.basis(N, 1)
+ket2 = qt.basis(N, 2)
+
+print("Shape of |0>:", ket0.shape)
+print("Norm of |0>:", ket0.norm())
+print("Norm of |1>:", ket1.norm())
+print("Norm of |2>:", ket2.norm())
+```
+
+## Step 3 – Creation and annhilation operators
+
+```{python}
+a = qt.destroy(N)
+adag = a.dag()
+
+print("Annihilation operator shape:", a.shape)
+print("Creation operator shape:", adag.shape)
+
+# Display a small block of the matrices
+small_dim = 6
+a_small = a.full()[:small_dim, :small_dim]
+adag_small = adag.full()[:small_dim, :small_dim]
+
+print("\nTop-left block of the annihilation operator:")
+print(np.round(a_small, 3))
+
+print("\nTop-left block of the creation operator:")
+print(np.round(adag_small, 3))
+```
+
+```{python}
+# Visualize the magnitude of the first few matrix elements
+plt.figure(figsize=(5, 4))
+plt.imshow(np.abs(a_small), origin="upper")
+plt.colorbar(label=r"$|a_{ij}|$")
+plt.title("Magnitude of the annihilation operator matrix")
+plt.xlabel("Column index")
+plt.ylabel("Row index")
+plt.show()
+
+plt.figure(figsize=(5, 4))
+plt.imshow(np.abs(adag_small), origin="upper")
+plt.colorbar(label=r"$|a^\dagger_{ij}|$")
+plt.title("Magnitude of the creation operator matrix")
+plt.xlabel("Column index")
+plt.ylabel("Row index")
+plt.show()
+```
+
+## Step 4 – Number operator and Hamiltonian
+
+```{python}
+I = qt.qeye(N)
+Nop = adag * a
+H = hbar * omega * (Nop + 0.5 * I)
+
+# Eigenenergies of the Hamiltonian
+energies_J = H.eigenenergies()
+energies_eV = energies_J / eV_to_J
+
+print("First 10 numerical eigenenergies in eV:")
+print(np.round(energies_eV[:10], 6))
+
+print("\nFirst 10 analytical eigenenergies in eV:")
+print(np.round(energy_spacing_eV * (np.arange(10) + 0.5), 6))
+```
+
+```{python}
+plt.figure(figsize=(7, 4))
+plt.plot(np.arange(10), energies_eV[:10], marker="o", label="QuTiP eigenenergies")
+plt.plot(np.arange(10), energy_spacing_eV * (np.arange(10) + 0.5), 
+linestyle="--", label="Analytical result")
+plt.xlabel(r"Quantum number $n$")
+plt.ylabel(r"Energy $E_n$ (eV)")
+plt.title("Numerical and analytical harmonic oscillator energies")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+
+## Step 5 – Action of ladder operator on Fock states
+
+```{python}
+def check_ladder_action(n):
+    ket_n = qt.basis(N, n)
+    lowered = a * ket_n
+    if n == 0:
+        expected_lowered = 0 * ket_n
+    else:
+        expected_lowered = np.sqrt(n) * qt.basis(N, n - 1)
+    raised = adag * ket_n
+    if n + 1 < N:
+        expected_raised = np.sqrt(n + 1) * qt.basis(N, n + 1)
+        raise_error = (raised - expected_raised).norm()
+    else:
+        raise_error = np.nan
+    lower_error = (lowered - expected_lowered).norm()
+    return lower_error, raise_error
+
+for n in range(6):
+    lower_error, raise_error = check_ladder_action(n)
+    print(f"n = {n}: lowering error = {lower_error:.2e}, raising error = {raise_error:.2e}")
+```
+
+## Step 6 – Probability distribution on the Fock basis
+
+```{python}
+n_state = 4
+ket_n = qt.basis(N, n_state)
+prob_fock = np.abs(ket_n.full().flatten())**2
+
+plt.figure(figsize=(7, 4))
+plt.bar(n_values, prob_fock)
+plt.xlim(-0.5, 12.5)
+plt.xlabel(r"Fock state index $k$")
+plt.ylabel(r"Probability $P(k)$")
+plt.title(rf"Fock-basis probability distribution for $|n={n_state}\rangle$")
+plt.grid(True, axis="y", alpha=0.3)
+plt.show()
+
+print(f"Expectation value <N> = {qt.expect(Nop, ket_n):.6f}")
+print(f"Variance Var(N) = {qt.variance(Nop, ket_n):.6f}")
+```
+
+## Step 7 – Position and momentum operators
+
+```{python}
+x_op = x_zpf * (a + adag)
+p_op = -1j * p_zpf * (a - adag)
+
+rows = []
+for n in range(6):
+    ket_n = qt.basis(N, n)
+    x_mean = qt.expect(x_op, ket_n)
+    p_mean = qt.expect(p_op, ket_n)
+    dx = np.sqrt(qt.variance(x_op, ket_n))
+    dp = np.sqrt(qt.variance(p_op, ket_n))
+    rows.append((n, x_mean, p_mean, dx, dp, dx * dp))
+
+header = (
+    f"{'n':>2}  {'<x> (nm)':>8}  {'<p> (SI)':>10}  "
+    f"{'Dx (nm)':>8}  {'Dp (SI)':>10}  {'DxDp/hbar':>9}"
+)
+print(header)
+
+for row in rows:
+    n, x_mean, p_mean, dx, dp, product = row
+    line = (
+        f"{n:2d}  {x_mean*1e9:8.4f}  {p_mean:10.3e}  "
+        f"{dx*1e9:8.4f}  {dp:10.3e}  {product/hbar:9.4f}"
+    )
+    print(line)
+```
+
+## Step 8 – Hermite polynomials and analytical wave functions
+
+```{python}
+def hermite_phys(n, xi):
+    # Physicists' Hermite polynomial H_n(xi), computed by recurrence.
+    xi = np.asarray(xi)
+    if n == 0:
+        return np.ones_like(xi)
+    if n == 1:
+        return 2 * xi
+
+    H_nm2 = np.ones_like(xi)
+    H_nm1 = 2 * xi
+
+    for k in range(1, n):
+        H_n = 2 * xi * H_nm1 - 2 * k * H_nm2
+        H_nm2, H_nm1 = H_nm1, H_n
+
+    return H_nm1
+
+def psi_n_physical(n, x):
+    # Normalized harmonic oscillator wave function, physical coordinate x (m).
+    # Returns psi_n(x) in units of m^(-1/2).
+    xi = np.sqrt(m * omega / hbar) * x
+    norm_dimensionless = 1.0 / np.sqrt((2**n) * factorial(n) * np.sqrt(np.pi))
+    physical_prefactor = (m * omega / hbar)**0.25
+    factor1 = physical_prefactor * norm_dimensionless
+    factor2 = hermite_phys(n, xi) * np.exp(-xi**2 / 2)
+    return factor1 * factor2
+
+# Physical position grid
+x = np.linspace(-5 * x_osc, 5 * x_osc, 1200)
+x_nm = x * 1e9
+xi = np.sqrt(m * omega / hbar) * x
+
+plt.figure(figsize=(8, 5))
+for n in range(4):
+    plt.plot(x_nm, hermite_phys(n, xi), label=rf"$H_{n}(\xi(x))$")
+
+plt.xlabel(r"Position $x$ (nm)")
+plt.ylabel(r"$H_n(\xi(x))$")
+plt.title("First Hermite polynomials evaluated over physical position range")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+```{python}
+plt.figure(figsize=(8, 5))
+for n in range(4):
+    # Convert from m^(-1/2) to nm^(-1/2) for easier plotting:
+    # |psi_m|^2 dx_m = |psi_nm|^2 dx_nm, so psi_nm = sqrt(1e-9)*psi_m.
+    psi_nm = np.sqrt(1e-9) * psi_n_physical(n, x)
+    plt.plot(x_nm, psi_nm, label=rf"$\psi_{n}(x)$")
+
+plt.xlabel(r"Position $x$ (nm)")
+plt.ylabel(r"Wave function $\psi_n(x)$ (nm$^{-1/2}$)")
+plt.title("First harmonic oscillator wave functions in physical units")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 9 – Probability densities and sampling interpretation
+
+```{python}
+plt.figure(figsize=(8, 5))
+for n in range(4):
+    psi_m = psi_n_physical(n, x)
+    density_per_nm = np.abs(psi_m)**2 * 1e-9
+    plt.plot(x_nm, density_per_nm, label=rf"$|\psi_{n}(x)|^2$")
+
+plt.xlabel(r"Position $x$ (nm)")
+plt.ylabel(r"Probability density (nm$^{-1}$)")
+plt.title("Probability densities of harmonic oscillator eigenstates")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+```{python}
+# Sampling interpretation for n = 3
+rng = np.random.default_rng(7)
+n_sample = 3
+
+psi_m = psi_n_physical(n_sample, x)
+density_per_m = np.abs(psi_m)**2
+dx_grid = x[1] - x[0]
+
+# Convert density on the grid into discrete probabilities
+prob_grid = density_per_m * dx_grid
+prob_grid = prob_grid / prob_grid.sum()
+
+samples_m = rng.choice(x, size=12000, p=prob_grid)
+samples_nm = samples_m * 1e9
+density_per_nm = density_per_m * 1e-9
+
+plt.figure(figsize=(8, 5))
+plt.hist(samples_nm, bins=60, density=True, alpha=0.6, 
+label="Simulated position measurements")
+plt.plot(x_nm, density_per_nm, linewidth=2, label=rf"$|\psi_{n_sample}(x)|^2$")
+plt.xlabel(r"Position $x$ (nm)")
+plt.ylabel(r"Probability density (nm$^{-1}$)")
+plt.title(rf"Sampling interpretation for $n={n_sample}$")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 10 – Superposition of Fock states
+
+```{python}
+# Example superposition state
+c0 = 1.0
+c1 = 1.0j
+c2 = -0.6
+
+psi_super = c0 * qt.basis(N, 0) + c1 * qt.basis(N, 1) + c2 * qt.basis(N, 2)
+psi_super = psi_super.unit()
+prob_super = np.abs(psi_super.full().flatten())**2
+
+plt.figure(figsize=(7, 4))
+plt.bar(n_values, prob_super)
+plt.xlim(-0.5, 8.5)
+plt.xlabel(r"Fock state index $n$")
+plt.ylabel(r"Probability $P(n)$")
+plt.title("Fock-basis probability distribution of a superposition state")
+plt.grid(True, axis="y", alpha=0.3)
+plt.show()
+
+print(f"State norm = {psi_super.norm():.6f}")
+print(f"<N> = {qt.expect(Nop, psi_super):.6f}")
+print(f"Var(N) = {qt.variance(Nop, psi_super):.6f}")
+```
+
+## Step 11 – Coherent states
+
+```{python}
+alpha = 2.0 + 0.5j
+ket_alpha = qt.coherent(N, alpha)
+residual = (a * ket_alpha - alpha * ket_alpha).norm()
+
+print(f"alpha = {alpha}")
+print(f"Norm of coherent state = {ket_alpha.norm():.6f}")
+print(f"Eigenstate residual ||a|alpha> - alpha|alpha>|| = {residual:.3e}")
+print(f"<N> = {qt.expect(Nop, ket_alpha):.6f}")
+print(f"|alpha|^2 = {abs(alpha)**2:.6f}")
+```
+
+## Step 12 – Fock distribution of a coherent state
+
+```{python}
+prob_alpha = np.abs(ket_alpha.full().flatten())**2
+mean_n = abs(alpha)**2
+poisson = np.array([
+    np.exp(-mean_n) * mean_n**n / factorial(n)
+    for n in n_values
+])
+
+plt.figure(figsize=(8, 5))
+plt.bar(n_values - 0.2, prob_alpha, width=0.4, label="QuTiP coherent state")
+plt.bar(n_values + 0.2, poisson, width=0.4, label="Poisson distribution")
+plt.xlim(-0.5, 18.5)
+plt.xlabel(r"Fock state index $n$")
+plt.ylabel(r"Probability $P(n)$")
+plt.title(r"Fock distribution of a coherent state")
+plt.grid(True, axis="y", alpha=0.3)
+plt.legend()
+plt.show()
+
+print(f"Sum of QuTiP probabilities = {prob_alpha.sum():.8f}")
+print(f"Mean from QuTiP = {qt.expect(Nop, ket_alpha):.6f}")
+print(f"Poisson mean = {mean_n:.6f}")
+```
+
+## Step 13 – Time evolution of a coherent state
+
+```{python}
+tlist = np.linspace(0, 4 * period, 400)
+t_fs = tlist * 1e15
+
+result = qt.sesolve(
+    H,
+    ket_alpha,
+    tlist,
+    e_ops=[x_op, p_op, Nop]
+)
+
+x_expect = np.real(result.expect[0])    # meters
+p_expect = np.real(result.expect[1])    # kg m/s
+N_expect = np.real(result.expect[2])
+
+p_scale = 1e-25
+
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, x_expect * 1e9, label=r"$\langle x(t)\rangle$ (nm)")
+plt.plot(t_fs, p_expect / p_scale, label=r"$\langle p(t)\rangle$ scaled")
+plt.xlabel(r"Time $t$ (fs)")
+plt.ylabel("Expectation value in convenient units")
+plt.title("Time evolution of a coherent state")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, N_expect)
+plt.xlabel(r"Time $t$ (fs)")
+plt.ylabel(r"$\langle N\rangle$")
+plt.title("Mean excitation number during coherent-state evolution")
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+## Step 14 – Classical-like behavior of coherent states
+
+```{python}
+alpha_t = alpha * np.exp(-1j * omega * tlist)
+
+x_classical_like = np.sqrt(2 * hbar / (m * omega)) * np.real(alpha_t)
+p_classical_like = np.sqrt(2 * m * hbar * omega) * np.imag(alpha_t)
+
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, x_expect * 1e9, label=r"QuTiP $\langle x(t)\rangle$")
+plt.plot(t_fs, x_classical_like * 1e9, linestyle="--", 
+label="Classical-like prediction")
+plt.xlabel(r"Time $t$ (fs)")
+plt.ylabel(r"$\langle x(t)\rangle$ (nm)")
+plt.title("Position expectation value")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, p_expect / p_scale, label=r"QuTiP $\langle p(t)\rangle$")
+plt.plot(t_fs, p_classical_like / p_scale, linestyle="--", 
+label="Classical-like prediction")
+plt.xlabel(r"Time $t$ (fs)")
+plt.ylabel(r"$\langle p(t)\rangle$ ($10^{-25}$ kg m/s)")
+plt.title("Momentum expectation value")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 15 – Quantum computing connection: truncated oscillator mode
+
+```{python}
+# Effect of truncation on the coherent-state eigenvalue relation
+alpha_test = 2.0
+cutoffs = [6, 8, 10, 12, 16, 20, 30, 40]
+residuals = []
+
+for cutoff in cutoffs:
+    a_cut = qt.destroy(cutoff)
+    ket_alpha_cut = qt.coherent(cutoff, alpha_test)
+    residual_cut = (a_cut * ket_alpha_cut - alpha_test * ket_alpha_cut).norm()
+    residuals.append(residual_cut)
+
+plt.figure(figsize=(7, 4))
+plt.plot(cutoffs, residuals, marker="o")
+plt.xlabel("Hilbert-space cutoff N")
+plt.ylabel(r"$\|a|\alpha\rangle-\alpha|\alpha\rangle\|$")
+plt.title("Truncation error for a coherent state")
+plt.grid(True, alpha=0.3)
+plt.show()
+
+for cutoff, residual_cut in zip(cutoffs, residuals):
+    print(f"N = {cutoff:2d}, residual = {residual_cut:.3e}")
+```
+
+## Student Challenge Solution
+
+### Step 1 – Define the simulation parameters
+
+```{python}
+import numpy as np
+import qutip as qt
+
+# Physical constants in SI units
+hbar = 1.054_571_817e-34       # J s
+m_e = 9.109_383_7015e-31       # kg
+eV_to_J = 1.602_176_634e-19    # J/eV
+
+# Oscillator parameters
+m = m_e
+energy_spacing_eV = 0.10
+energy_spacing_J = energy_spacing_eV * eV_to_J
+omega = energy_spacing_J / hbar   # Angular frequency (rad/s)
+
+# Hilbert-space cutoff and challenge target
+N = 40
+n_target = 6.0
+
+# Physical scales
+x_zpf = np.sqrt(hbar / (2 * m * omega))   # Zero-point position scale (m)
+p_zpf = np.sqrt(m * hbar * omega / 2)     # Zero-point momentum scale (kg m/s)
+period = 2 * np.pi / omega                # Period (s)
+
+# Print outputs matching Step 1 expected result
+print(f"QuTiP version: {qt.__version__}")
+print("Physical parameters")
+print("-------------------")
+print(f"hbar = {hbar:.6e} J s")
+print(f"m = m_e = {m:.6e} kg")
+print(f"hbar*omega = {energy_spacing_eV:.4f} eV")
+print(f"omega = {omega:.6e} rad/s")
+print(f"period = {period * 1e15:.3f} fs")
+print(f"x_zpf = {x_zpf * 1e9:.4f} nm")
+print(f"p_zpf = {p_zpf:.6e} kg m/s")
+print()
+print(f"Fock-space cutoff: N = {N}")
+print(f"Target mean excitation number: n_target = {n_target:.1f}")
+```
+
+### Step 2 – Construct the oscillator operators
+
+```{python}
+# Construct fundamental operators in QuTiP
+a = qt.destroy(N)
+adag = a.dag()
+I = qt.qeye(N)
+
+# Construct number operator and Hamiltonian
+Nop = adag * a
+H = hbar * omega * (Nop + 0.5 * I)
+
+# Construct physical position and momentum operators
+x = x_zpf * (a + adag)
+p = -1j * p_zpf * (a - adag)
+
+# Verify dimensions (N x N)
+print("Operators constructed successfully.")
+print(f"Dimension of a: {a.shape}")
+print(f"Dimension of H: {H.shape}")
+print()
+
+# Eigenenergies reported in eV
+energies_eV = H.eigenenergies() / eV_to_J
+
+print("First five Hamiltonian eigenenergies in eV:")
+for n in range(5):
+    print(f"n = {n}: E = {energies_eV[n]:.4f} eV")
+```
+
+### Step 3 — Choose the coherent-state parameter ($\alpha$)
+
+```{python}
+# Choose coherent-state parameter alpha for purely real displacement
+alpha = np.sqrt(n_target)
+ket_alpha = qt.coherent(N, alpha)
+
+# Calculate expectation values
+x_mean_0 = qt.expect(x, ket_alpha)  # meters
+p_mean_0 = qt.expect(p, ket_alpha)  # kg m/s
+
+# Display results matching expected output
+print(f"Chosen alpha = {alpha:.6f}")
+print(f"|alpha|^2 = {abs(alpha)**2:.6f}")
+print(f"Norm of |alpha> = {ket_alpha.norm():.12f}")
+print()
+print("Initial expectation values")
+print("---------------------------")
+print(f"<x(0)> = {np.real(x_mean_0) * 1e9:.6f} nm")
+print(f"<p(0)> = {np.real(p_mean_0):.6e} kg m/s")
+```
+
+### Step 4 — Check the coherent-state properties
+
+```{python}
+# Compute expectations and statistics for the coherent state
+mean_N = qt.expect(Nop, ket_alpha)
+var_N = qt.variance(Nop, ket_alpha)
+delta_N = np.sqrt(var_N)
+
+# Energy expectation in Joules and conversion to eV
+mean_H_J = qt.expect(H, ket_alpha)
+mean_H_eV = mean_H_J / eV_to_J
+
+# Coherent-state eigenvalue residual
+residual = (a * ket_alpha - alpha * ket_alpha).norm()
+
+# Display coherent-state diagnostics
+print("Coherent-state diagnostics")
+print("---------------------------")
+print(f"<N>        = {mean_N:.8f}")
+print(f"Var(N)     = {var_N:.8f}")
+print(f"Delta N    = {delta_N:.8f}")
+print(f"sqrt(<N>)  = {np.sqrt(mean_N):.8f}")
+print(f"<H>        = {mean_H_eV:.8f} eV")
+print(f"Eigenstate residual ||a|alpha> - alpha|alpha>|| = {residual:.3e}")
+```
+
+### Step 5 — Plot the Fock-basis probability distribution
+
+```{python}
+# Extract numerical probabilities from QuTiP coherent state
+P_qutip = np.abs(ket_alpha.full().flatten())**2
+
+# Compute theoretical Poisson distribution
+mean_n = abs(alpha)**2
+P_poisson = np.array([
+    np.exp(-mean_n) * (mean_n**n) / factorial(n) 
+    for n in n_values
+])
+
+# Plot comparison bar chart
+plt.figure(figsize=(8, 5))
+plt.bar(n_values - 0.15, P_qutip, width=0.3, label="QuTiP coherent state")
+plt.bar(n_values + 0.15, P_poisson, width=0.3, label="Poisson distribution")
+
+plt.xlim(-0.5, 20.5)
+plt.xlabel(r"Fock state index $n$")
+plt.ylabel(r"Probability $P(n)$")
+plt.title(r"Fock distribution of the coherent state $|\alpha\rangle$")
+plt.grid(True, axis="y", alpha=0.3)
+plt.legend()
+plt.show()
+
+# Print normalization sums
+print(f"Sum of QuTiP probabilities = {P_qutip.sum():.11f}")
+print(f"Sum of Poisson probabilities over cutoff = {P_poisson.sum():.11f}")
+```
+
+### Step 6 — Compare the coherent state with the Fock state ($\vert{}6\rangle$)
+
+```{python}
+# Construct target Fock state |6>
+ket_fock = qt.basis(N, 6)
+
+# Compute Fock state probability distribution and diagnostics
+P_fock = np.abs(ket_fock.full().flatten())**2
+mean_N_fock = qt.expect(Nop, ket_fock)
+var_N_fock = qt.variance(Nop, ket_fock)
+
+# Print diagnostics
+print("Fock state diagnostics")
+print("-----------------------")
+print(f"<N> for |6>    = {mean_N_fock:.8f}")
+print(f"Var(N) for |6> = {var_N_fock:.8f}")
+
+# Plot bar chart comparison
+plt.figure(figsize=(8, 5))
+plt.bar(n_values - 0.15, P_qutip, width=0.3, 
+label=r"Coherent state, $\langle N \rangle = 6.0$")
+plt.bar(n_values + 0.15, P_fock, width=0.3, label=r"Fock state $|6\rangle$")
+
+plt.xlim(-0.5, 20.5)
+plt.xlabel(r"Fock state index $n$")
+plt.ylabel(r"Probability $P(n)$")
+plt.title("Coherent state versus Fock state in the number basis")
+plt.grid(True, axis="y", alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+### Step 7 — Time evolution of the coherent state
+
+```{python}
+# Define time array covering 4 oscillator periods (t_final = 4T)
+t_final = 4 * period
+tlist = np.linspace(0, t_final, 400)
+t_fs = tlist * 1e15
+
+# Evolution Hamiltonian in angular frequency units (rad/s)
+# standard Schrödinger equation: d/dt|psi(t)> = -i * H_evolution * |psi(t)>
+H_evolution = H / hbar
+
+# Solve time-dependent Schrödinger equation
+result = qt.sesolve(H_evolution, ket_alpha, tlist, e_ops=[x, p, Nop])
+
+# Store expectation values as time-dependent arrays
+x_t = np.real(result.expect[0])
+p_t = np.real(result.expect[1])
+N_t = np.real(result.expect[2])
+
+# Print evolution summary matching expected outputs
+print("Time evolution completed.")
+print(f"Simulated time interval: 0 to {t_fs[-1]:.3f} fs")
+print(f"Average excitation number: <N(t)> ≈ {np.mean(N_t):.2f}")
+```
+
+### Step 8 — Plot ($\langle \hat{x}(t) \rangle$)
+
+```{python}
+# Classical-like trajectory prediction for a coherent state
+alpha_t = alpha * np.exp(-1j * omega * tlist)
+x_classical = np.sqrt(2 * hbar / (m * omega)) * np.real(alpha_t)
+
+# Plot position expectation value vs time
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, x_t * 1e9, label=r"QuTiP $\langle x(t) \rangle$")
+plt.plot(
+    t_fs,
+    x_classical * 1e9,
+    linestyle="--",
+    label="Classical-like prediction",
+)
+
+plt.xlabel("Time t (fs)")
+plt.ylabel(r"$\langle x(t)\rangle$ (nm)")
+plt.title("Position expectation value for a coherent state")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+### Step 9 — Plot ($\langle \hat{p}(t) \rangle$)
+
+```{python}
+# Scale factor for momentum display (kg m/s)
+p_scale = 1e-25
+
+# Classical-like momentum prediction for a coherent state
+alpha_t = alpha * np.exp(-1j * omega * tlist)
+p_classical = np.sqrt(2 * m * hbar * omega) * np.imag(alpha_t)
+
+# Plot momentum expectation value vs time
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, p_t / p_scale, label=r"QuTiP $\langle p(t) \rangle$")
+plt.plot(
+    t_fs,
+    p_classical / p_scale,
+    linestyle="--",
+    label="Classical-like prediction",
+)
+
+plt.xlabel("Time t (fs)")
+plt.ylabel(r"$\langle p(t)\rangle$ ($10^{-25}$ kg m/s)")
+plt.title("Momentum expectation value for a coherent state")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+### Step 10 — Plot ($\langle \hat{N}(t) \rangle$)
+
+```{python}
+# Plot mean excitation number vs time
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, N_t)
+
+plt.xlabel("Time t (fs)")
+plt.ylabel(r"$\langle \hat{N}(t) \rangle$")
+plt.title("Mean excitation number during coherent-state evolution")
+plt.ylim(5.80, 6.18)
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+### Step 11 — Plot the phase-space trajectory of the coherent state
+
+```{python}
+# Scale factor for momentum display (kg m/s)
+p_scale = 1e-25
+
+# Parametric phase-space plot: <p(t)> vs <x(t)>
+plt.figure(figsize=(6, 5))
+plt.plot(x_t * 1e9, p_t / p_scale)
+
+plt.xlabel(r"$\langle x(t) \rangle$ (nm)")
+plt.ylabel(r"$\langle p(t) \rangle$ ($10^{-25}$ kg m/s)")
+plt.title("Phase-space trajectory of the coherent state")
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+### Step 12 — Compare coherent-state and Fock-state dynamics
+
+```{python}
+# Evolve the Fock state |6> under the same Hamiltonian
+result_fock = qt.sesolve(H_evolution, ket_fock, tlist, e_ops=[x, p, Nop])
+
+# Extract expectation values for the Fock state
+x_fock_t = np.real(result_fock.expect[0])
+p_fock_t = np.real(result_fock.expect[1])
+N_fock_t = np.real(result_fock.expect[2])
+
+# Plot 1: Position dynamics comparison
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, x_t * 1e9, label=r"Coherent state $\langle x(t) \rangle$")
+plt.plot(
+    t_fs,
+    x_fock_t * 1e9,
+    linestyle="--",
+    label=r"Fock state $|6\rangle$: $\langle x(t) \rangle$",
+)
+
+plt.xlabel("Time t (fs)")
+plt.ylabel(r"$\langle x(t)\rangle$ (nm)")
+plt.title("Position dynamics: coherent state versus Fock state")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+# Plot 2: Momentum dynamics comparison
+plt.figure(figsize=(8, 4))
+plt.plot(t_fs, p_t / p_scale, label=r"Coherent state $\langle p(t) \rangle$")
+plt.plot(
+    t_fs,
+    p_fock_t / p_scale,
+    linestyle="--",
+    label=r"Fock state $|6\rangle$: $\langle p(t) \rangle$",
+)
+
+plt.xlabel("Time t (fs)")
+plt.ylabel(r"$\langle p(t)\rangle$ ($10^{-25}$ kg m/s)")
+plt.title("Momentum dynamics: coherent state versus Fock state")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+# Print average excitation numbers for comparison
+print(f"Mean <N> for coherent state = {np.mean(N_t):.8f}")
+print(f"Mean <N> for Fock state     = {np.mean(N_fock_t):.8f}")
+```
+
+#### Final interpretation
+
+A Fock state ($\vert{}n\rangle$) has a definite excitation number. Therefore, it is useful as a computational basis state for oscillator modes.
+
+A coherent state ($\vert{}\alpha\rangle$) does not have a definite excitation number. Instead, it has a distribution over many Fock states. However, its expectation values move in a classical-like way.
+
+Using realistic physical units makes the simulation easier to connect with microscopic oscillator systems: energies are expressed in **eV**, time in **fs**, position in **nm**, and momentum in **kg m/s**.
+
+This is why the Fock basis is useful for computation, while coherent states are useful for modeling classical-like oscillator behavior in quantum systems such as resonators, cavities, and bosonic quantum information platforms.

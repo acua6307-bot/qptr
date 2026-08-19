@@ -1,0 +1,506 @@
+---
+title: "Wave Packets, Group Velocity and Uncertainty Relations"
+format: pdf
+editor: visual
+---
+
+## Step 0 – Imports and constants
+
+We use SI units internally. Lengths will be plotted in **nm**, wave numbers in **nm**$^{-1}$, and time in **fs** whenever convenient.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+import qutip as qt
+
+h = 6.62607015e-34            # J s
+hbar = 1.054571817e-34        # J s
+m_e = 9.1093837015e-31        # kg
+eV = 1.602176634e-19          # J
+
+plt.rcParams['figure.figsize'] = (8, 4.5)
+plt.rcParams['axes.grid'] = True
+plt.rcParams['font.size'] = 11
+
+print('Imports succesful.')
+print(f'hbar = {hbar:.6e} J s')
+print(f'm_e = {m_e:.6e} kg')
+```
+
+## Step 1 – Grid and numerical parameters
+
+We work on a one-dimensional grid centered at $x=0$. The corresponding $k$ grid is obtained from the FFT convention.
+
+```{python}
+N = 512
+x_max = 40e-9         # 40 nm on each side
+dx = 2 * x_max / N
+x = (np.arange(N) - N // 2) * dx
+L = N * dx
+k = 2 * np.pi * np.fft.fftfreq(N, d=dx)
+dk = 2 * np.pi / L
+
+lambda0 = 1.6e-9      # central de Broglie wavelength (m)
+k0 = 2 * np.pi / lambda0
+sigma_k0 = 0.30e9     # 1/m
+Delta_k_two = 0.25e9  # 1/m
+
+print(f'N = {N}')
+print(f'dx = {dx:.3e} m')
+print(f'L  = {L:.3e} m')
+print(f'dk = {dk:.3e} 1/m')
+print(f'Central wavelength = {lambda0*1e9:.3f} nm')
+print(f'k0 = {k0:.3} 1/m')
+```
+
+## Step 2 – Functions
+
+```{python}
+def normalize_on_grid(psi_x, dx):
+  norm = np.sqrt(np.sum(np.abs(psi_x)**2)*dx)
+  return psi_x/norm
+
+def x_to_k(psi_x, dx):
+  psi_shifted = np.fft.ifftshift(psi_x)
+  phi_k = (dx / np.sqrt(2*np.pi)) * np.fft.fft(psi_shifted)
+  return phi_k
+
+def k_to_x(phi_k, dk):
+  Nloc = len(phi_k)
+  psi_x = np.fft.fftshift(np.fft.ifft(phi_k)*Nloc*dk/(np.sqrt(2*np.pi)))
+  return psi_x
+
+def omega_free(k):
+  return hbar*k**2/(2*m_e)
+
+def plane_wave(x,k0,t=0.0,A=1.0):
+  phase = k0*x-omega_free(k0)*t
+  psi = A*np.exp(1j*phase)
+  return psi
+
+def two_wave_superposition(x,t,k0,Delta_k,A=0.5):
+  k1=k0-Delta_k/2
+  k2=k0+Delta_k/2
+  w1=omega_free(k1)
+  w2=omega_free(k2)
+  psi1=A*np.exp(1j*(k1*x-w1*t))
+  psi2=A*np.exp(1j*(k2*x-w2*t))
+  psi_total=psi1+psi2
+  return psi_total,k1,k2,w1,w2
+
+def gaussian_phi_k(k,k0,sigma_k,dk):
+  phi=np.exp(-0.5*((k-k0)/sigma_k)**2)
+  norm=np.sqrt(np.sum(np.abs(phi)**2)*dk)
+  phi=phi/norm
+  return phi
+
+def rectangular_phi_k(k,k0,width,dk):
+  phi=np.where(np.abs(k-k0)<=width/2,1.0,0.0)
+  phi=phi.astype(complex)  
+  norm=np.sqrt(np.sum(np.abs(phi)**2)*dk)
+  phi=phi/norm
+  return phi
+
+def evolve_free_from_phi(phi_k,t,k,dk,dx):
+  phase_factor=np.exp(-1j*omega_free(k)*t)
+  phi_k_t=phi_k*phase_factor
+  psi_t=k_to_x(phi_k_t,dk)
+  psi_t=normalize_on_grid(psi_t,dx)
+  return psi_t
+
+def k_moments_numeric(phi_k,k,dx):
+  rho_k=np.abs(phi_k)**2
+  k_mean=np.sum(k*rho_k)*dk
+  # k2_mean=np.sum(k**2*rho_k)*dk
+  # variance_k=np.maximum(k2_mean-(k_mean)**2,0.0)
+  # Dk=np.sqrt(variance_k)
+  variance_k = np.sum((k - k_mean)**2 * rho_k) * dk
+  Dk = np.sqrt(np.maximum(variance_k, 0.0))
+  return k_mean,Dk
+
+def ket_from_psi(psi_x,dx):
+  ket_vector=psi_x*np.sqrt(dx)
+  ket_vector=ket_vector.reshape(-1,1)
+  ket=qt.Qobj(ket_vector)
+  return ket
+
+def x_moments_numeric(psi_x,x,dx):
+  rho=np.abs(psi_x)**2
+  x_mean=np.sum(x*rho)*dx
+  x2_mean=np.sum(x**2*rho)*dx
+  variance_x=np.maximum(x2_mean-(x_mean)**2,0.0)
+  Dx=np.sqrt(variance_x)
+  return x_mean,Dx
+
+def build_x_operator(x):
+  x_matrix=np.diag(x)
+  x_matrix=x_matrix.astype(complex)
+  x_operator=qt.Qobj(x_matrix)
+  return x_operator
+
+def expectation_and_variance(ket,op):
+  mean=np.real(qt.expect(op, ket))
+  mean2=np.real(qt.expect(op**2,ket))
+  variance=np.maximum(mean2-mean**2,0.0)
+  std_dev=np.sqrt(variance)
+  return mean,std_dev
+```
+
+## Step 3 – Plane wave as a first approximation
+
+Theory. A monochromatic plane wave $\psi(x,t)=Ae^{i(kx-\omega t)}$ represents a state of definite momentum, but it is spread over all space.
+
+Key check: the probability density should be constant.
+
+```{python}
+psi_plane = plane_wave(x, k0, t=0.0, A=1.0)
+P_plane = np.abs(psi_plane)**2
+
+print(f'Plane-wave probability density min/max = {P_plane.min():.6f}, '
+f'{P_plane.max():.6f}')
+print('Conclusion: |psi|^2 is constant, so a single plane wave is not')
+print('localized in space.')
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+ax[0].plot(x*1e9,np.real(psi_plane))
+ax[0].set_title('Real part of a plane wave')
+ax[0].set_xlabel('x (nm)')
+ax[0].set_ylabel('Re[psi(x,0)]')
+ax[1].plot(x * 1e9, P_plane)
+ax[1].set_title('Probability density of a plane wave')
+ax[1].set_xlabel('x (nm)')
+ax[1].set_ylabel('|psi(x,0)|^2')
+fig.tight_layout()
+plt.show()
+```
+
+## Step 4 – Phase velocity and the two-wave superposition
+
+Theory. For a free non-relativistic particle.
+
+$$\omega(k)=\frac{\hbar k^2}{2m}, \,\,\ v_{ph}=\frac{w}{k}, \,\,\ v_g=\frac{dw}{dk}=\frac{\hbar k}{m}.$$
+
+A useful first model of a packet-like state is the superposition of two nearby plane waves.
+
+```{python}
+v_phase=omega_free(k0)/k0
+v_group_theory=hbar*k0/m_e
+
+print(f"Phase velocity v_ph = {v_phase:.3e} m/s")
+print(f"Group/particle velocity v_g = p/m = {v_group_theory:.3e} m/s")
+print(f"For a non-relativistic free particle, "
+f"v_ph / v_g = {v_phase / v_group_theory:.3f}")
+
+psi_two,k1,k2,w1,w2= two_wave_superposition(x,0.0,k0,Delta_k_two,A=0.5)
+envelope = 2 * 0.5 * np.cos(Delta_k_two * x / 2)
+carrier = np.cos(k0 * x)
+modulated_real = np.real(psi_two)
+fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+axes[0].plot(x * 1e9, carrier)
+axes[0].set_title("Carrier wave")
+axes[1].plot(x * 1e9, envelope)
+axes[1].set_title("Envelope")
+axes[2].plot(x * 1e9, modulated_real)
+axes[2].set_title("Real part of the two-wave superposition")
+axes[3].plot(x * 1e9, modulated_real, label="Modulated wave")
+axes[3].plot(x * 1e9, envelope, linestyle='--', label="+ envelope")
+axes[3].plot(x * 1e9, -envelope, linestyle='--', label="- envelope")
+axes[3].set_title("Modulated wave with envelope")
+axes[3].legend(loc="upper right", fontsize="small")
+axes[3].set_xlabel("x (nm)")
+fig.tight_layout()
+plt.show()
+```
+
+## Step 5 – Probability density, maxima, zeros, and central width
+
+Theory. For the two-wave case, the probability density is controlled by the slowly varying envelope. The first zeros occur at $x=\pm \frac{\pi}{\Delta k}$, and the central width is $\Delta x = \frac{2\pi}{\Delta k}$.
+
+```{python}
+P_two = np.abs(psi_two)**2
+x_zero_theory = np.pi /  Delta_k_two
+Delta_x_theory = 2 * np.pi / Delta_k_two
+
+print(f'Theoretical first zeros: x = +- {x_zero_theory*1e9:.3f} nm')
+print(f'Theoretical central width Delta x '
+f'= 2 pi / Delta k = {Delta_x_theory*1e9:.3f} nm')
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.plot(x * 1e9, P_two)
+ax.axvline(+x_zero_theory * 1e9, linestyle='--')
+ax.axvline(-x_zero_theory * 1e9, linestyle='--')
+ax.set_title('Probability density for the two-wave superposition')
+ax.set_xlabel('x (nm)')
+ax.set_ylabel('|psi(x,0|^2')
+plt.show()
+```
+
+## Step 6 – Time dependence of the two-wave superposition
+
+Theory. The envelope moves with $v_g = \frac{\Delta\omega}{\Delta k}$ while the carrier moves with the phase velocity. This is the first clear appearance of **group velocity**
+
+```{python}
+v_group_two = (w2 - w1) / (k2 - k1)
+v_phase_carrier = (w1 + w2) / (k1 + k2)
+small_t = 12e-15  # 12 fs
+psi_two_t, *_ = two_wave_superposition(x, small_t, k0, Delta_k_two, A=0.5)
+
+print(f'Two-wave envelope speed Delta omega/Delta k = {v_group_two:.3e} m/s')
+print(f'Carrier phase speed omega/k = {v_phase_carrier:.3e} m/s')
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.plot(x * 1e9, np.real(psi_two), label='t = 0 fs')
+ax.plot(x * 1e9, np.real(psi_two_t), label=f't = {small_t*1e15:.1f} fs')
+ax.set_title('Time dependence of the two wave superposition')
+ax.set_xlabel('x (nm)')
+ax.set_ylabel('Re[psi(x,t)]')
+ax.legend()
+plt.show()
+```
+
+## Step 7 – Continuous superposition: Gaussian packet in momentum space
+
+Theory. A more realistic localized packet comes from  a continuous superposition of plane waves with an amplitude $A(k)$ peaked around $k_0$.
+
+Here we use a **Gaussian spectrum**.
+
+```{python}
+phi_g = gaussian_phi_k(k, k0, sigma_k0, dk)
+psi_g = normalize_on_grid(k_to_x(phi_g, dk), dx)
+phi_back = x_to_k(psi_g, dx)
+phi_back /= np.sqrt(np.sum(np.abs(phi_back)**2) * dk)
+
+print(f'Normalization in x-space = {np.sum(np.abs(psi_g)**2)*dx:.6f}')
+print(f'Normalization in k-space = {np.sum(np.abs(phi_back)**2)*dk:.6f}')
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+ax[0].plot(x * 1e9, np.abs(psi_g)**2)
+ax[0].set_title('Gaussian wave packet in x-space')
+ax[0].set_xlabel('x (nm)')
+ax[0].set_ylabel('|psi(x,0)|^2')
+ax[1].plot(np.fft.fftshift(k) * 1e-9, np.fft.fftshift(np.abs(phi_g)**2))
+ax[1].set_title('Momentum-space amplitude density')
+ax[1].set_xlabel('k (nm$^{-1}$)')
+ax[1].set_ylabel('|phi(k)|^2')
+fig.tight_layout()
+plt.show()
+```
+
+## Step 8 – Expectation values and variances with QuTiP
+
+Theory. The Unit 5 computational practice is supposed to emphasize **superposition of states, expectation values**, and **variance analysis**.
+
+We therefore compute $\langle x\rangle$, $\Delta x$, $\langle p\rangle$ and $\Delta p$ using QuTiP operators.
+
+```{python}
+from scipy.linalg import dft
+from scipy.sparse import diags
+
+ket_g = ket_from_psi(psi_g, dx)
+x_op = build_x_operator(x)
+# def build_p_operator(k, N):
+#     I = np.eye(N)
+#     I_shifted = np.fft.ifftshift(I, axes=0)
+#     F = np.fft.fft(I_shifted, axis=0) / np.sqrt(N)
+#     p_k = np.diag(hbar * k)
+#     p_matrix = F.conj().T @ p_k @ F
+#     return qt.Qobj(p_matrix)
+def build_p_operator(N, dx):
+    ones = np.ones(N - 1)
+    diff_matrix=diags([ones,-ones],[1,-1],shape=(N,N)).toarray()/(2*dx)
+    diff_matrix[0, -1] = -1 / (2 * dx)
+    diff_matrix[-1, 0] = 1 / (2 * dx)
+    p_matrix = -1j * hbar * diff_matrix
+    return qt.Qobj(p_matrix)
+p_op = build_p_operator(N, dx)  
+x_mean_qt, Dx_qt = expectation_and_variance(ket_g, x_op)
+p_mean_qt, Dp_qt = expectation_and_variance(ket_g, p_op)
+k_mean_num, Dk_num = k_moments_numeric(phi_g, k, dk)
+
+print(f'<x> = {x_mean_qt*1e9:.6f} nm')
+print(f'Delta x = {Dx_qt*1e9:.6f} nm')
+print(f'<p> = {p_mean_qt:.3e} kg m/s')
+print(f'Delta p = {Dp_qt:.3e} kg m/s')
+print(f'<k> = {k_mean_num*1e-9:.6f} nm^-1')
+print(f'Delta k = {Dk_num*1e-9:.6f} nm^-1')
+print(f'Check: hbar<k> = {hbar*k_mean_num:.3e} kg m/s')
+```
+
+## Step 9 – Reciprocity scan: $\Delta x\Delta k$ and the bridge to $\Delta x\Delta p$
+
+Theory. Localizing the packet in $x$ requires a broader distribution in $k$. This is the reciprocity relation that leads naturally to the uncertyainity principle.
+
+```{python}
+sigma_scan = np.array([0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.65]) * 1e9
+Dx_list = []
+Dk_list = []
+Dp_list = []
+for sig in sigma_scan:
+  phi = gaussian_phi_k(k,k0,sig,dk)
+  psi = normalize_on_grid(k_to_x(phi,dk),dx)
+  ket = ket_from_psi(psi,dx)
+  _,Dx_here = expectation_and_variance(ket,x_op)
+  _,Dp_here = expectation_and_variance(ket,p_op)
+  _,Dk_here = k_moments_numeric(phi,k,dk)
+  Dx_list.append(Dx_here)
+  Dp_list.append(Dp_here)
+  Dk_list.append(Dk_here)
+
+Dx_list = np.asarray(Dx_list)
+Dp_list = np.asarray(Dp_list)
+Dk_list = np.asarray(Dk_list)
+
+for sig,dxv,dkv,dpv in zip(sigma_scan,Dx_list,Dk_list,Dp_list):
+  print(f'sigma_k={sig*1e-9:.3f} nm^-1 |'
+  f'Delta x={dxv*1e9:.3f} nm |'
+  f'Delta k={dkv*1e-9:.3f} nm^-1 |'
+  f'Delta x*Delta p/hbar={dxv*dpv/hbar:.3f}')  
+
+fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+ax[0].plot(sigma_scan * 1e-9, Dx_list * 1e9, 'o-')
+ax[0].set_title("Localization in x vs spread in k")
+ax[0].set_xlabel("Input sigma_k (nm$^{-1}$)")
+ax[0].set_ylabel("Delta x (nm)")
+ax[1].plot(sigma_scan * 1e-9, Dx_list * Dk_list, 'o-', 
+label=r"$\Delta x \Delta k$")
+ax[1].plot(sigma_scan * 1e-9, Dx_list * Dp_list / hbar, 's--', 
+label=r"$\Delta x \Delta p / \hbar$")
+ax[1].axhline(1.0, linestyle='--', color='gray', label='reference = 1')
+ax[1].set_title("Fourier reciprocity and uncertainty check")
+ax[1].set_xlabel("Input sigma_k (nm$^{-1}$)")
+ax[1].legend()
+fig.tight_layout()
+plt.show()
+```
+
+## Step 10 – Virtual experiment: rectangular spectrum and sinc-like packet
+
+Theory. Problem 5.1 in the notes uses a rectangular amplitude in $k-$space. Its Fourier transform produces a packet with a sharp central peak and side lobes.
+
+```{python}
+phi_rect = rectangular_phi_k(k, k0, width=0.80e9, dk=dk)
+psi_rect = normalize_on_grid(k_to_x(phi_rect, dk), dx)
+
+print('A rectangular A(k) produces a packet with a central peak and side lobes') 
+print('(sinc-like structure).')
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+ax[0].plot(np.fft.fftshift(k) * 1e-9, np.fft.fftshift(np.abs(phi_rect)**2))
+ax[0].set_title('Rectangular spectrum in k-space')
+ax[0].set_xlabel('k (nm$^{-1}$)')
+ax[0].set_ylabel('|A(k)|^2')
+ax[1].plot(x * 1e9, np.abs(psi_rect)**2)
+ax[1].set_title('Packet generated by a rectangular spectrum')
+ax[1].set_xlabel('x (nm)')
+ax[1].set_ylabel('|psi(x)|^2')
+fig.tight_layout()
+plt.show()
+```
+
+## Step 11 – Free-particle time evolution: group velocity and spreading
+
+Theory. For a free packet, $\psi(x,t) = \frac{1}{\sqrt{2\pi}}\in A(k) e^{i(kx-\omega(k)t)}dk$. The linear term in the expansion of $\omega(k)$ around $k_0$ moves the envelope with the group velocity, while higher-order terms produce **dispersion**.
+
+```{python}
+phi0 = gaussian_phi_k(k,k0,0.25*1e9,dk)
+t_fs = np.linspace(0, 40, num=81)
+t_s = t_fs*1e-15
+x_mean_t = []
+Dx_t = []
+for t in t_s:
+  psi_t = evolve_free_from_phi(phi0,t,k,dk,dx)
+  ket_t = ket_from_psi(psi_t,dx)
+  x_mean_here,Dx_here = expectation_and_variance(ket_t,x_op)
+  x_mean_t.append(x_mean_here)
+  Dx_t.append(Dx_here)
+
+x_mean_t = np.asarray(x_mean_t)
+Dx_t = np.asarray(Dx_t)
+
+coeffs = np.polyfit(t_s, x_mean_t, 1)
+v_group_measured = coeffs[0]
+
+print("Theoretical group velocity =", v_group_theory, "m/s")
+print("Measured packet speed from <x>(t) =", v_group_measured, "m/s")
+print("Relative error =",
+100*np.abs(v_group_measured-v_group_theory)/np.abs(v_group_theory), "%")
+print("Initial width Delta x(0) =", Dx_t[0], "nm")
+print("Final width Delta x(40 fs) =", Dx_t[80], "nm")
+
+fig, ax = plt.subplots(2, 1, figsize=(8, 10))
+ax[0].plot(t_fs, x_mean_t * 1e9)
+ax[0].set_title("Center of the packet vs time")
+ax[0].set_xlabel("t (fs)")
+ax[0].set_ylabel("<x>(t) (nm)")
+ax[0].grid(True)
+ax[1].plot(t_fs, Dx_t * 1e9)
+ax[1].set_title("Packet spreading")
+ax[1].set_xlabel("t (fs)")
+ax[1].set_ylabel("Delta x(t) (nm)")
+ax[1].grid(True)
+fig.tight_layout()
+plt.show()
+
+selected_fs = [0, 10, 20, 30, 40]
+fig, ax = plt.subplots(figsize=(9,5))
+for tf in selected_fs:
+  psi_t = evolve_free_from_phi(phi0, tf * 1e-15, k, dk, dx)
+  ax.plot(x * 1e9, np.abs(psi_t)**2, label=f'{tf} fs')
+ax.set_title('Free-particle evolution of the Gaussian packet')
+ax.set_label('x (nm)')
+ax.set_ylabel('|psi(x,t)|^2')
+ax.legend()
+plt.show()
+```
+
+## Step 12 – Validity condition of the packed picture
+
+Theory. Since different $k$ components move with slightly different group velocities, the packet behaves approximately like a localized particle only while $\Delta v_g,t << \Delta x$.
+
+```{python}
+Delta_vg = hbar * Dk_num / m_e
+left_side = Delta_vg * t_s[-1]
+right_side = Dx_qt
+
+print(f'Delta v_g ~= (h/m)Delta k = {Delta_vg:.3e} m/s')
+print(f'At t = {t_fs[-1]:.1f} fs, Delta v_g t = {left_side*1e9:.3f} nm')
+print(f'Initial Delta x = {right_side*1e9:.3f} nm')
+print('The packet picture is best while Delta v_g t << Delta x;') 
+print('as time increases, dispersion becomes mores visible.')
+```
+
+## Step 13 — Bridge to Heisenberg and energy-time uncertainty
+
+Theory. The notes connect the reciprocity relation in 
+$x-$space and $k-$space with the position-momentum uncertainty relation, and then motivate the energy-time relation from the finite duration of the packet.
+
+```{python}
+DeltaE = abs(v_group_theory) * Dp_qt
+Delta_t = Dx_qt / abs(v_group_theory)
+
+print(f'ΔxΔp = {Dx_qt*Dp_qt:.3e} J s')
+print(f'ΔxΔp / ħ = {Dx_qt*Dp_qt/hbar:.3f}')
+print(f'Approximate ΔE = v Δp = {DeltaE/eV:.3f} eV')
+print(f'Approximate Δt = Δx / v = {Delta_t*1e15:.3f} fs')
+print(f'Approximate ΔEΔt / ħ = {DeltaE*Delta_t/hbar:.3f}')
+```
+
+## Step 14 — Final results summary
+
+This notebook has covered the essential points of Unit 5 related to wave packets and the uncertainty principle.
+
+```{python}
+print('Results Summary')
+print('- A plane wave has definite momentum but constant probability')
+print('density, so it is not localized.')
+print('- A wave packet is formed by superposition; localization in x')
+print('requires a spread in k (and therefore in p).')
+print('- In the two-wave model, the envelope introduces a central region') 
+print('whose width scales as Δx ~ 2π/Δk.')
+print('- For a Gaussian packet, the numerical results confirm reciprocity') 
+print('between Δx and Δk and the bridge to ΔxΔp.')
+print('- The center of the packet moves with the group velocity, which') 
+print('matches the particle velocity for a free particle.')
+print('- The packet spreads with time because different k-components travel') 
+print('with slightly different group velocities.')
+```
+
+

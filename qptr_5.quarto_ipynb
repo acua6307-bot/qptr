@@ -1,0 +1,472 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "---\n",
+        "title: \"The Bohr Model -- hydrogen-like atoms, effective Hamiltonian, and spectral series\"\n",
+        "format: pdf\n",
+        "editor: visual\n",
+        "---\n",
+        "\n",
+        "## Purpose\n",
+        "\n",
+        "In this lab you will build an **effective Hamiltonian** for hydrogen-like atoms using the Bohr energy levels and use Python/QuTiP to compute and visualize **energy spectra** and **spectral series**. You will:\n",
+        "\n",
+        "  - Compute the Bohr energy $E_n \\propto -Z^2/n^2$ and represent $\\{|n\\rangle\\}_{n=1}^{n_{\\max}}$ as a finite Hilbert space.\n",
+        "  \n",
+        "  - Construct the effective Hamiltonian\n",
+        "  \n",
+        "  $$ \\hat{H}_{\\text{eff}}=\\sum_{n=1}^{n_{\\max}}E_n|n\\rangle\\langle n|$$\n",
+        "\n",
+        "and verify that diagonalizaiton produces the expected $E_n$.\n",
+        "\n",
+        "  - Predict emission absorption wavelengths using the **Rydberg formula** and generate **stick spectra** for Lyman, Balmer, Paschen, Brackett, and Pfund series.\n",
+        "  \n",
+        "  - Explore how spectra shift with nuclear charge $Z$ (hydrogenic ions such as He⁺, Li^{2+},...).\n",
+        "  \n",
+        "  - **Finite nuclear mass (reduced mass):** compare $R_{\\infty}$ vs the corrected $R\\approx R_{\\infty} (\\mu/m_e)$ and quantify the wavelength shift.\n",
+        "  \n",
+        "  - **Toy relaxation model (open system):** implement effective decays $|n\\rangle \\rightarrow |n-1\\rangle$ with collapse operators and visualize population relaxation (effective model; not a full QED derivation).\n",
+        "  \n",
+        "**QED (Quantum Electrodynamics).** QED is the quantum field theory that describes how charged matter (e.g., electrons) interacts with the electromagnetic field by *quantizing* the field (light appears as photons). It provides first-principles predicitons for processes such as absorption/emission of radiation, scattering, and radiative corrections in atoms. In this lab we use an **efective** open-system (Lindblad) relaxation model rather than a full QED derivation of spontaneous emission.\n",
+        "\n",
+        "\n",
+        "## Methods and material\n",
+        "\n",
+        "  - Computer with **Python 3** and **JupyterLab** (or Jupyter Notebook).\n",
+        "  \n",
+        "  - Packages: **numpy, matplotlib, qutip** (optional: **scipy, pandas**).\n",
+        "  \n",
+        "  - This is a **computational lab** (no physical spectroscopy setup is used).\n",
+        "  \n",
+        "\n",
+        "## Step 0 -- Imports and constants\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "We will use the SI units for dynamics (J, s, m) and eV for reporting energies. Use:\n",
+        "\n",
+        "$$\\hbar = \\frac{h}{2\\pi}, \\,\\ 1\\text{eV} = e \\text{J}.$$"
+      ],
+      "id": "b6ec5cb3"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "import numpy as np\n",
+        "import matplotlib.pyplot as plt\n",
+        "import qutip as qt\n",
+        "   \n",
+        "h = 6.62607015e-34\n",
+        "hbar = h/(2*np.pi)\n",
+        "c = 299792458.0\n",
+        "eC = 1.602176634e-19\n",
+        "eps0 = 8.8541878128e-12\n",
+        "me = 9.1093837015e-31\n",
+        "mp = 1.6726e-27\n",
+        "R_inf = 1.09737e7"
+      ],
+      "id": "2f0361cf",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 1 -- Bohr energies $E_n$ (hydrogen-like atoms)\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "In the Bohr model, the bound state energies are\n",
+        "\n",
+        "$$E_n = -13.6\\frac{Z^2}{n^2}\\text{eV}, \\,\\ n=1,2,\\dots$$\n",
+        "\n",
+        "The negative sign indicates a bound electron. The **ionization energy** from the ground state is 13.6 eV for hydrogen ($Z=1$). \n",
+        "\n",
+        "We will use a truncated basis $\\{|n\\rangle\\}_{n=1}^{n_{\\max}}$."
+      ],
+      "id": "fad7b335"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "n_max = 4\n",
+        "Z = 1\n",
+        "\n",
+        "n = np.arange(1, n_max+1)\n",
+        "\n",
+        "En_eV = -13.6*Z**2/n**2\n",
+        "En_J = En_eV * eC\n",
+        "\n",
+        "print(\"E_1 (eV) =\", En_eV[0])"
+      ],
+      "id": "396e2732",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "plt.figure()\n",
+        "plt.plot(n, En_eV, marker=\"o\")\n",
+        "plt.xlabel(\"n\")\n",
+        "plt.ylabel(r\"$E_n$ (eV)\")\n",
+        "plt.title(f\"Bohr energies (Z={Z}): $E_n \\propto -Z^2/n^2$\")\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "id": "d7cddbf1",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 2 -- Effective Hamiltonian $\\hat{H}_{\\text{eff}}$\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "In quantum mechanics, the Hamiltonian $\\hat{H}$ is the **energy operator**. Stationary states satisfy\n",
+        "\n",
+        "$$\\hat{H}|\\phi_k\\rangle = E_k|\\phi_k\\rangle,$$\n",
+        "\n",
+        "and time evolution is governed by\n",
+        "\n",
+        "$$i\\hbar = \\frac{\\partial}{\\partial t}|\\psi(t)\\rangle.$$\n",
+        "\n",
+        "To focus on spectroscopy, we build an **effective Hamiltonian** on the truncated basis $|n\\rangle:$\n",
+        "\n",
+        "$$\\hat{H}_{\\text{eff}}=\\sum_{n=1}^{n_{\\max}}E_n |n\\rangle\\langle n|.$$\n",
+        "\n",
+        "In the $|n\\rangle$ basis this is a **diagonal matrix** witn entries $E_n$."
+      ],
+      "id": "ffe1b075"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "H_energy = qt.Qobj(np.diag(En_J))\n",
+        "H_proj_energy = 0*H_energy\n",
+        "for idx, E in enumerate(En_J):\n",
+        "  ket = qt.basis(n_max, idx)\n",
+        "  H_proj_energy += E * (ket * ket.dag())\n",
+        "\n",
+        "print(\"||H_energy - H_proj_energy|| =\", (H_energy - H_proj_energy).norm())  \n",
+        "\n",
+        "evals_J = H_energy.eigenenergies()\n",
+        "evals_eV = evals_J /eC\n",
+        "print(\"First 5 eigenenergies (eV):\", np.round(evals_eV[:5], 6))\n",
+        "\n",
+        "H = H_energy"
+      ],
+      "id": "a05ad263",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "print(\"Check: E_n from fomrula (eV) =\", np.round(En_eV[:5],6))\n",
+        "print(\"Check: E_n from diagonalization (eV) =\",\n",
+        "np.round((H_energy.eigenenergies()/eC)[:5],6))"
+      ],
+      "id": "0e7541c3",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 3 -- Transitions and the Rydberg formula\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "A transition $n_i \\rightarrow n_f$ emits/absorbs a photon with energy\n",
+        "\n",
+        "$$h\\nu = |E_{n_i}-E_{n_j}|.$$\n",
+        "\n",
+        "In spectroscopy we often use the **wavenumber** $\\bar{\\nu}=1/\\lambda$, and for hydrogen-like atoms:\n",
+        "\n",
+        "$$\\bar{\\nu}=R_{\\infty}Z^2\\Big(\\frac{1}{n_f^2}-\\frac{1}{n_i^2}\\Big), \\,\\ n_i>n_f.$$\n",
+        "\n",
+        "**Notation:** $n_f =$ final (lower) level, $n_i=$ initial (upper) level."
+      ],
+      "id": "9e66bb95"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "def rydberg_wavelength(nf, ni, Z=1, R=R_inf):\n",
+        "    #nf = int(nf); ni = int(ni); Z = int(Z)\n",
+        "    if np.any(nf < 1) or np.any(ni < 1) or np.any(Z < 1):\n",
+        "        raise ValueError(\"nf, ni, and Z must be positive integers.\")\n",
+        "    if np.any(ni <= nf):\n",
+        "        raise ValueError(\"Require ni > nf for a transition (ni -> nf).\")\n",
+        "    inv_lambda = R * (Z**2) * (1.0/(nf**2)-1.0/(ni**2))\n",
+        "    return 1.0/inv_lambda\n",
+        "\n",
+        "# Balmer (nf=2):ni=3..10\n",
+        "for ni in range(3,11):\n",
+        "    lam_nm = rydberg_wavelength(2, ni, Z=1, R=R_inf,)*1e9\n",
+        "    print(f\"n={ni}->2:{lam_nm:3f}nm\")"
+      ],
+      "id": "ec642ce7",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 4 -- Stick spectra for spectral series\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "Hydrogen series correspond to a fixed final level $n_f$:\n",
+        "\n",
+        "  - Lyman: $n_f=1$ (UV)\n",
+        "\n",
+        "  - Balmer: $n_f=2$ (visible/near-UV)\n",
+        "\n",
+        "  - Paschen: $n_f=3$ (IR)\n",
+        "\n",
+        "  - Brackett: $n_f = 4$ (IR)\n",
+        "\n",
+        "  - Pfund: $n_f= 5$ (IR)\n",
+        "\n",
+        "A stick spectrum places a vertical line at each predicted wavelength $\\lambda_{n_i\\rightarrow n_f}$. We will plot sticks without attempting a full intensity model. "
+      ],
+      "id": "84f3bed1"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "def stick_spectrum(nf, nmax, Z=1, R=R_inf):\n",
+        "    LAMBDA_NM = list()\n",
+        "    for ni in range((nf + 1),(nmax + 1)):\n",
+        "        lambda_m = rydberg_wavelength(nf, ni, Z, R)\n",
+        "        lambda_nm = lambda_m * 1e9\n",
+        "        LAMBDA_NM.append(lambda_nm)\n",
+        "    return(LAMBDA_NM)\n",
+        "\n",
+        "lam_nm = stick_spectrum(2, n_max, Z=1, R=R_inf)\n",
+        "fig, ax = plt.subplots()         \n",
+        "ax.vlines(lam_nm, 0, 1)\n",
+        "ax.set_xlabel(\"Wavelength (nm)\")\n",
+        "ax.set_ylabel(\"Intensity (arb.)\")\n",
+        "ax.set_title(\"Balmer series (stick spectrum), Z=1\")\n",
+        "ax.grid(True)\n",
+        "plt.show()"
+      ],
+      "id": "04dcf832",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 5 -- Hydrogenic ions: dependence on (Z)\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "Bohr energies scale as $E_n \\propto -Z^2$. Transition energies increase with $Z^2$, so wavelengths tend to shift to **shorter** values as $Z$ increases.\n",
+        "\n",
+        "We will compare the same series  for multiple $Z$ values."
+      ],
+      "id": "6d7b605b"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "fig, ax = plt.subplots()\n",
+        "for i, Zval in enumerate([1, 2, 3]):\n",
+        "    lam_nm = stick_spectrum(2, n_max, Z=Zval, R=R_inf)\n",
+        "    y0 = 1.2 * i\n",
+        "    ax.vlines(lam_nm, y0, y0 + 1, label=f\"Z={Zval}\")\n",
+        "ax.set_xlabel(\"Wavelength (nm)\")\n",
+        "ax.set_ylabel(\"Relative intensity (arb.)\")\n",
+        "ax.set_title(\"Balmer series shift with Z (stick spectra)\")\n",
+        "ax.legend()\n",
+        "ax.grid(True)\n",
+        "plt.show()"
+      ],
+      "id": "89053bb3",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 6 -- Finite nuclear mass: reduced-mass correction\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "$R_{\\infty}$ corresponds to the infinite nuclear-mass approximation. A basic correction replaces $m_e$ by the reduced mass $\\mu$:\n",
+        "\n",
+        "$$\\mu=\\frac{m_eM}{m_e+M}, \\,\\ R\\approx R_{\\infty}\\Big(\\frac{\\mu}{m_e}\\Big).$$\n",
+        "\n",
+        "For hydrogen, $M\\approx m_p$. This produces small wavelength shifts that you will quantify."
+      ],
+      "id": "32d63318"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "M = mp\n",
+        "mu = (me*M)/(me+M)\n",
+        "R_corr = R_inf * (mu/me)\n",
+        "\n",
+        "print(\"mu/me =\", mu/me)\n",
+        "print(\"R_corr (1/m) =\", R_corr)"
+      ],
+      "id": "6cda45d8",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "ni_vals = np.arange(3, n_max + 1)\n",
+        "\n",
+        "lam_inf = rydberg_wavelength(2, ni_vals, Z, R_inf)\n",
+        "lam_corr = rydberg_wavelength(2, ni_vals, Z, R_corr)\n",
+        "    \n",
+        "delta_pm = (lam_corr - lam_inf) * 1e12\n",
+        "\n",
+        "for ni, L0, Lc, d in zip(ni_vals, lam_inf*1e9, lam_corr*1e9, delta_pm):\n",
+        "    print(f\"n={ni} -> 2: lambda_inf={L0:.6f} nm, lambda_corr={Lc:.6f} nm,\" \n",
+        "    f\"delta_lambda={d:.3f} pm\")\n",
+        "\n",
+        "plt.figure()\n",
+        "plt.plot(ni_vals, delta_pm, marker=\"o\")\n",
+        "plt.xlabel(r\"Initial level $n_i$\")\n",
+        "plt.ylabel(r\"$\\Delta\\lambda$ (pm)\")    \n",
+        "plt.title(\"Reduced-mass correction for Balmer wavelengths (H)\")\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "id": "e00a3090",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 7 -- Toy relaxation models (open quantum system)\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "To visualize relaxation from an excited level to the ground state, we use an effective Lindblad master equation:\n",
+        "\n",
+        "$$\\frac{d \\rho}{d t} = -\\frac{i}{\\hbar}[\\hat{H},\\rho]+\\sum_k\\Big(\\hat{c}_k\\rho\\hat{c}_k^\\dagger -\\frac{1}{2}\\{\\hat{c}_k^\\dagger\\hat{c}_k,\\rho\\}\\Big).$$\n",
+        "\n",
+        "We choose collapse operators for adjacent decays:\n",
+        "\n",
+        "$$\\hat{c}_n = \\sqrt{\\gamma_n}|n-1\\rangle\\langle n|, \\,\\ n=2,\\dots,n_{\\max}.$$\n",
+        "\n",
+        "A simple rate model is $\\gamma_n=\\gamma_0/n^3$ (you may choose $\\gamma_0$). This is an **effective** model (not a full QED derivation)."
+      ],
+      "id": "19c89ec6"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "n0 = 2\n",
+        "rho0 = qt.ket2dm(qt.basis(n_max, n0 - 1))\n",
+        "\n",
+        "gamma0 = 1.0e8\n",
+        "c_ops = []\n",
+        "for n_level in range(2, n_max + 1):\n",
+        "    gamma_n = gamma0 / (n_level**3)\n",
+        "    ket_down = qt.basis(n_max, n_level - 2)\n",
+        "    bra_up = qt.basis(n_max, n_level - 1).dag()\n",
+        "    c_ops.append(np.sqrt(gamma_n) * (ket_down * bra_up))\n",
+        "\n",
+        "t_max = 2.0e-7\n",
+        "tlist = np.linspace(0, t_max, 400)\n",
+        "\n",
+        "result = qt.mesolve(H, rho0, tlist, c_ops, e_ops=[])\n",
+        "\n",
+        "# result.states[0]\n",
+        "\n",
+        "proj_ops = [qt.basis(n_max, k) * qt.basis(n_max, k).dag() for k in range(n_max)]\n",
+        "pops = qt.expect(proj_ops, result.states)\n",
+        "\n",
+        "plt.figure()\n",
+        "for k in range(n_max):\n",
+        "    plt.plot(tlist, pops[k], label=f\"n={k+1}\")\n",
+        "plt.xlabel(\"t (s)\")\n",
+        "plt.ylabel(\"Population\")\n",
+        "plt.title(f\"Toy relaxation cascade n0={n0})\")\n",
+        "plt.legend(ncol=2, fontsize=8)\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "id": "88c00399",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Step 8 -- Interpretation: cascade photons vs full spectral series\n",
+        "\n",
+        "**Theory**\n",
+        "\n",
+        "I the toy model only allows adjacent decays $n\\rightarrow n-1$, then emitted photons correspond only to those steps. However, the full hydrogen spectrum contains transitions with many possible $\\Delta n$ (subject to selection rules in a more complete model).\n",
+        "\n",
+        "Here you will compare (qualitatively) the set of wavelengths from the cascade with the Rydberg-series predictions."
+      ],
+      "id": "1a02942d"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "pairs = [(ni, ni-1) for ni in range(n0, 1, -1)]\n",
+        "\n",
+        "print(\"Adjacent cascade wavelengths (nm):\")\n",
+        "for ni, nf in pairs:\n",
+        "    lam_nm = rydberg_wavelength(nf, ni, Z=Z, R=R_corr) * 1e9\n",
+        "    print(f\"{ni} ->  {nf}: {lam_nm:.3f} nm\")\n",
+        "\n",
+        "print()\n",
+        "lam_direct_nm = rydberg_wavelength(1, n0, Z=Z, R=R_corr) * 1e9\n",
+        "print(f\"Direct transition {n0} -> 1 (nm): {lam_direct_nm:.3f}\")"
+      ],
+      "id": "d729e961",
+      "execution_count": null,
+      "outputs": []
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "name": "python3",
+      "language": "python",
+      "display_name": "Python 3 (ipykernel)",
+      "path": "/home/jp/.local/share/jupyter/kernels/python3"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

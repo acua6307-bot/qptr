@@ -1,0 +1,334 @@
+---
+title: "The Bohr Model -- hydrogen-like atoms, effective Hamiltonian, and spectral series"
+format: pdf
+editor: visual
+---
+
+## Purpose
+
+In this lab you will build an **effective Hamiltonian** for hydrogen-like atoms using the Bohr energy levels and use Python/QuTiP to compute and visualize **energy spectra** and **spectral series**. You will:
+
+  - Compute the Bohr energy $E_n \propto -Z^2/n^2$ and represent $\{|n\rangle\}_{n=1}^{n_{\max}}$ as a finite Hilbert space.
+  
+  - Construct the effective Hamiltonian
+  
+  $$ \hat{H}_{\text{eff}}=\sum_{n=1}^{n_{\max}}E_n|n\rangle\langle n|$$
+
+and verify that diagonalizaiton produces the expected $E_n$.
+
+  - Predict emission absorption wavelengths using the **Rydberg formula** and generate **stick spectra** for Lyman, Balmer, Paschen, Brackett, and Pfund series.
+  
+  - Explore how spectra shift with nuclear charge $Z$ (hydrogenic ions such as He⁺, Li^{2+},...).
+  
+  - **Finite nuclear mass (reduced mass):** compare $R_{\infty}$ vs the corrected $R\approx R_{\infty} (\mu/m_e)$ and quantify the wavelength shift.
+  
+  - **Toy relaxation model (open system):** implement effective decays $|n\rangle \rightarrow |n-1\rangle$ with collapse operators and visualize population relaxation (effective model; not a full QED derivation).
+  
+**QED (Quantum Electrodynamics).** QED is the quantum field theory that describes how charged matter (e.g., electrons) interacts with the electromagnetic field by *quantizing* the field (light appears as photons). It provides first-principles predicitons for processes such as absorption/emission of radiation, scattering, and radiative corrections in atoms. In this lab we use an **efective** open-system (Lindblad) relaxation model rather than a full QED derivation of spontaneous emission.
+
+
+## Methods and material
+
+  - Computer with **Python 3** and **JupyterLab** (or Jupyter Notebook).
+  
+  - Packages: **numpy, matplotlib, qutip** (optional: **scipy, pandas**).
+  
+  - This is a **computational lab** (no physical spectroscopy setup is used).
+  
+
+## Step 0 -- Imports and constants
+
+**Theory**
+
+We will use the SI units for dynamics (J, s, m) and eV for reporting energies. Use:
+
+$$\hbar = \frac{h}{2\pi}, \,\ 1\text{eV} = e \text{J}.$$
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+import qutip as qt
+   
+h = 6.62607015e-34
+hbar = h/(2*np.pi)
+c = 299792458.0
+eC = 1.602176634e-19
+eps0 = 8.8541878128e-12
+me = 9.1093837015e-31
+mp = 1.6726e-27
+R_inf = 1.09737e7
+```
+
+## Step 1 -- Bohr energies $E_n$ (hydrogen-like atoms)
+
+**Theory**
+
+In the Bohr model, the bound state energies are
+
+$$E_n = -13.6\frac{Z^2}{n^2}\text{eV}, \,\ n=1,2,\dots$$
+
+The negative sign indicates a bound electron. The **ionization energy** from the ground state is 13.6 eV for hydrogen ($Z=1$). 
+
+We will use a truncated basis $\{|n\rangle\}_{n=1}^{n_{\max}}$.
+
+```{python}
+n_max = 8
+Z = 1
+
+n = np.arange(1, n_max+1)
+
+En_eV = -13.6*Z**2/n**2
+En_J = En_eV * eC
+
+print("E_1 (eV) =", En_eV[0])
+```
+
+```{python}
+plt.figure()
+plt.plot(n, En_eV, marker="o")
+plt.xlabel("n")
+plt.ylabel(r"$E_n$ (eV)")
+plt.title(f"Bohr energies (Z={Z}): $E_n \propto -Z^2/n^2$")
+plt.grid(True)
+plt.show()
+```
+
+## Step 2 -- Effective Hamiltonian $\hat{H}_{\text{eff}}$
+
+**Theory**
+
+In quantum mechanics, the Hamiltonian $\hat{H}$ is the **energy operator**. Stationary states satisfy
+
+$$\hat{H}|\phi_k\rangle = E_k|\phi_k\rangle,$$
+
+and time evolution is governed by
+
+$$i\hbar = \frac{\partial}{\partial t}|\psi(t)\rangle.$$
+
+To focus on spectroscopy, we build an **effective Hamiltonian** on the truncated basis $|n\rangle:$
+
+$$\hat{H}_{\text{eff}}=\sum_{n=1}^{n_{\max}}E_n |n\rangle\langle n|.$$
+
+In the $|n\rangle$ basis this is a **diagonal matrix** witn entries $E_n$.
+
+```{python}
+H_energy = qt.Qobj(np.diag(En_J))
+H_proj_energy = 0*H_energy
+for idx, E in enumerate(En_J):
+  ket = qt.basis(n_max, idx)
+  H_proj_energy += E * (ket * ket.dag())
+
+print("||H_energy - H_proj_energy|| =", (H_energy - H_proj_energy).norm())  
+
+evals_J = H_energy.eigenenergies()
+evals_eV = evals_J /eC
+print("First 5 eigenenergies (eV):", np.round(evals_eV[:5], 6))
+
+H = H_energy
+```
+
+```{python}
+print("Check: E_n from fomrula (eV) =", np.round(En_eV[:5],6))
+print("Check: E_n from diagonalization (eV) =",
+np.round((H_energy.eigenenergies()/eC)[:5],6))
+```
+
+## Step 3 -- Transitions and the Rydberg formula
+
+**Theory**
+
+A transition $n_i \rightarrow n_f$ emits/absorbs a photon with energy
+
+$$h\nu = |E_{n_i}-E_{n_j}|.$$
+
+In spectroscopy we often use the **wavenumber** $\bar{\nu}=1/\lambda$, and for hydrogen-like atoms:
+
+$$\bar{\nu}=R_{\infty}Z^2\Big(\frac{1}{n_f^2}-\frac{1}{n_i^2}\Big), \,\ n_i>n_f.$$
+
+**Notation:** $n_f =$ final (lower) level, $n_i=$ initial (upper) level.
+
+```{python}
+def rydberg_wavelength(nf, ni, Z=1, R=R_inf):
+    #nf = int(nf); ni = int(ni); Z = int(Z)
+    if np.any(nf < 1) or np.any(ni < 1) or np.any(Z < 1):
+        raise ValueError("nf, ni, and Z must be positive integers.")
+    if np.any(ni <= nf):
+        raise ValueError("Require ni > nf for a transition (ni -> nf).")
+    inv_lambda = R * (Z**2) * (1.0/(nf**2)-1.0/(ni**2))
+    return 1.0/inv_lambda
+
+# Balmer (nf=2):ni=3..10
+for ni in range(3,11):
+    lam_nm = rydberg_wavelength(2, ni, Z=1, R=R_inf,)*1e9
+    print(f"n={ni}->2:{lam_nm:3f}nm")
+```
+
+## Step 4 -- Stick spectra for spectral series
+
+**Theory**
+
+Hydrogen series correspond to a fixed final level $n_f$:
+
+  - Lyman: $n_f=1$ (UV)
+
+  - Balmer: $n_f=2$ (visible/near-UV)
+
+  - Paschen: $n_f=3$ (IR)
+
+  - Brackett: $n_f = 4$ (IR)
+
+  - Pfund: $n_f= 5$ (IR)
+
+A stick spectrum places a vertical line at each predicted wavelength $\lambda_{n_i\rightarrow n_f}$. We will plot sticks without attempting a full intensity model. 
+
+```{python}
+def stick_spectrum(nf, nmax, Z=1, R=R_inf):
+    LAMBDA_NM = list()
+    for ni in range((nf + 1),(nmax + 1)):
+        lambda_m = rydberg_wavelength(nf, ni, Z, R)
+        lambda_nm = lambda_m * 1e9
+        LAMBDA_NM.append(lambda_nm)
+    return(LAMBDA_NM)
+
+lam_nm = stick_spectrum(2, n_max, Z=1, R=R_inf)
+fig, ax = plt.subplots()         
+ax.vlines(lam_nm, 0, 1)
+ax.set_xlabel("Wavelength (nm)")
+ax.set_ylabel("Intensity (arb.)")
+ax.set_title("Balmer series (stick spectrum), Z=1")
+ax.grid(True)
+plt.show()
+```
+
+## Step 5 -- Hydrogenic ions: dependence on (Z)
+
+**Theory**
+
+Bohr energies scale as $E_n \propto -Z^2$. Transition energies increase with $Z^2$, so wavelengths tend to shift to **shorter** values as $Z$ increases.
+
+We will compare the same series  for multiple $Z$ values.
+
+```{python}
+fig, ax = plt.subplots()
+for i, Zval in enumerate([1, 2, 3]):
+    lam_nm = stick_spectrum(2, n_max, Z=Zval, R=R_inf)
+    y0 = 1.2 * i
+    ax.vlines(lam_nm, y0, y0 + 1, label=f"Z={Zval}")
+ax.set_xlabel("Wavelength (nm)")
+ax.set_ylabel("Relative intensity (arb.)")
+ax.set_title("Balmer series shift with Z (stick spectra)")
+ax.legend()
+ax.grid(True)
+plt.show()
+```
+
+## Step 6 -- Finite nuclear mass: reduced-mass correction
+
+**Theory**
+
+$R_{\infty}$ corresponds to the infinite nuclear-mass approximation. A basic correction replaces $m_e$ by the reduced mass $\mu$:
+
+$$\mu=\frac{m_eM}{m_e+M}, \,\ R\approx R_{\infty}\Big(\frac{\mu}{m_e}\Big).$$
+
+For hydrogen, $M\approx m_p$. This produces small wavelength shifts that you will quantify.
+
+```{python}
+M = mp
+mu = (me*M)/(me+M)
+R_corr = R_inf * (mu/me)
+
+print("mu/me =", mu/me)
+print("R_corr (1/m) =", R_corr)
+```
+
+```{python}
+ni_vals = np.arange(3, n_max + 1)
+
+lam_inf = rydberg_wavelength(2, ni_vals, Z, R_inf)
+lam_corr = rydberg_wavelength(2, ni_vals, Z, R_corr)
+    
+delta_pm = (lam_corr - lam_inf) * 1e12
+
+for ni, L0, Lc, d in zip(ni_vals, lam_inf*1e9, lam_corr*1e9, delta_pm):
+    print(f"n={ni} -> 2: lambda_inf={L0:.6f} nm, lambda_corr={Lc:.6f} nm," 
+    f"delta_lambda={d:.3f} pm")
+
+plt.figure()
+plt.plot(ni_vals, delta_pm, marker="o")
+plt.xlabel(r"Initial level $n_i$")
+plt.ylabel(r"$\Delta\lambda$ (pm)")    
+plt.title("Reduced-mass correction for Balmer wavelengths (H)")
+plt.grid(True)
+plt.show()
+```
+
+## Step 7 -- Toy relaxation models (open quantum system)
+
+**Theory**
+
+To visualize relaxation from an excited level to the ground state, we use an effective Lindblad master equation:
+
+$$\frac{d \rho}{d t} = -\frac{i}{\hbar}[\hat{H},\rho]+\sum_k\Big(\hat{c}_k\rho\hat{c}_k^\dagger -\frac{1}{2}\{\hat{c}_k^\dagger\hat{c}_k,\rho\}\Big).$$
+
+We choose collapse operators for adjacent decays:
+
+$$\hat{c}_n = \sqrt{\gamma_n}|n-1\rangle\langle n|, \,\ n=2,\dots,n_{\max}.$$
+
+A simple rate model is $\gamma_n=\gamma_0/n^3$ (you may choose $\gamma_0$). This is an **effective** model (not a full QED derivation).
+
+```{python}
+n0 = 5
+rho0 = qt.ket2dm(qt.basis(n_max, n0 - 1))
+
+gamma0 = 1.0e8
+c_ops = []
+for n_level in range(2, n_max + 1):
+    gamma_n = gamma0 / (n_level**3)
+    ket_down = qt.basis(n_max, n_level - 2)
+    bra_up = qt.basis(n_max, n_level - 1).dag()
+    c_ops.append(np.sqrt(gamma_n) * (ket_down * bra_up))
+
+t_max = 2.0e-7
+tlist = np.linspace(0, t_max, 400)
+
+result = qt.mesolve(H, rho0, tlist, c_ops, e_ops=[])
+
+# result.states[0]
+
+proj_ops = [qt.basis(n_max, k) * qt.basis(n_max, k).dag() for k in range(n_max)]
+pops = qt.expect(proj_ops, result.states)
+
+plt.figure()
+for k in range(n_max):
+    plt.plot(tlist, pops[k], label=f"n={k+1}")
+plt.xlabel("t (s)")
+plt.ylabel("Population")
+plt.title(f"Toy relaxation cascade n0={n0})")
+plt.legend(ncol=2, fontsize=8)
+plt.grid(True)
+plt.show()
+```
+
+## Step 8 -- Interpretation: cascade photons vs full spectral series
+
+**Theory**
+
+I the toy model only allows adjacent decays $n\rightarrow n-1$, then emitted photons correspond only to those steps. However, the full hydrogen spectrum contains transitions with many possible $\Delta n$ (subject to selection rules in a more complete model).
+
+Here you will compare (qualitatively) the set of wavelengths from the cascade with the Rydberg-series predictions.
+
+```{python}
+pairs = [(ni, ni-1) for ni in range(n0, 1, -1)]
+
+print("Adjacent cascade wavelengths (nm):")
+for ni, nf in pairs:
+    lam_nm = rydberg_wavelength(nf, ni, Z=Z, R=R_corr) * 1e9
+    print(f"{ni} ->  {nf}: {lam_nm:.3f} nm")
+
+print()
+lam_direct_nm = rydberg_wavelength(1, n0, Z=Z, R=R_corr) * 1e9
+print(f"Direct transition {n0} -> 1 (nm): {lam_direct_nm:.3f}")
+```
+
+
+

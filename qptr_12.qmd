@@ -1,0 +1,896 @@
+---
+title: "Quantum Scattering by Barriers and Wells"
+format: pdf
+editor: visual
+---
+
+## Step 0 – Imports and constants
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Useful constant for electron scattering in eV and nm
+HBAR2_OVER_2ME = 0.0380998212  # eV nm^2
+
+# Nuclear constants for alpha decay in MeV and fm
+HBAR_C = 197.3269804          # MeV fm
+M_ALPHA_C2 = 3727.379         # MeV
+E2 = 1.439964                 # MeV fm, e^2/(4*pi*epsilon_0)
+
+print("Constants loaded:")
+print(f"hbar^2/(2m_e) = {HBAR2_OVER_2ME:.10f} eV nm^2")
+print(f"hbar c = {HBAR_C:.6f} MeV fm")
+print(f"m_alpha c^2 = {M_ALPHA_C2:.3f} MeV")
+```
+
+## Step 1 – Potential Step: Reflection and Transmission
+
+```{python}
+def step_RT(E, V0):
+    """
+    Reflection and transmission for a potential step.
+
+    E and V0 are in eV. The penetration length is returned in nm
+    for the case E < V0.
+    """
+    E_arr = np.asarray(E, dtype=float)
+    R = np.zeros_like(E_arr)
+    T = np.zeros_like(E_arr)
+    penetration_length = np.full_like(E_arr, np.nan)
+
+    above = E_arr > V0
+    below = E_arr < V0
+    equal = np.isclose(E_arr, V0)
+
+    if np.any(above):
+        k1 = np.sqrt(E_arr[above] / HBAR2_OVER_2ME)
+        k2 = np.sqrt((E_arr[above] - V0) / HBAR2_OVER_2ME)
+        R[above] = ((k1 - k2) / (k1 + k2))**2
+        T[above] = 4*k1*k2 / (k1 + k2)**2
+
+    if np.any(below):
+        kappa = np.sqrt((V0 - E_arr[below]) / HBAR2_OVER_2ME)
+        penetration_length[below] = 1/kappa
+        R[below] = 1.0
+        T[below] = 0.0
+
+    if np.any(equal):
+        R[equal] = np.nan
+        T[equal] = np.nan
+
+    if np.isscalar(E):
+        pl = None if above.item() else float(penetration_length)
+        return float(R), float(T), pl
+
+    return R, T, penetration_length
+```
+
+## Step 2 – Potential Step: Graphical Analysis
+
+```{python}
+# Visualization of the potential step and the scattering waves
+# Case: E > V0, so the wave is propagating on both sides.
+
+V0 = 1.0  # eV
+E = 2.0   # eV, choose E > V0
+
+# Wave numbers in nm^{-1}
+k1 = np.sqrt(E / HBAR2_OVER_2ME)
+k2 = np.sqrt((E - V0) / HBAR2_OVER_2ME)
+
+# Reflection and transmission amplitudes
+r = (k1 - k2) / (k1 + k2)
+t = 2 * k1 / (k1 + k2)
+
+# Reflection and transmission coefficients
+R = abs(r)**2
+T = (k2 / k1) * abs(t)**2
+
+print(f"k1 = {k1:.3f} nm^-1")
+print(f"k2 = {k2:.3f} nm^-1")
+print(f"r = {r:.3f}")
+print(f"t = {t:.3f}")
+print(f"R = {R:.5f}")
+print(f"T = {T:.5f}")
+print(f"R + T = {R + T:.5f}")
+
+# Position grid
+x_left = np.linspace(-3.0, 0.0, 800)
+x_right = np.linspace(0.0, 3.0, 800)
+
+# Potential step
+x_all = np.linspace(-3.0, 3.0, 1000)
+V_all = np.where(x_all < 0, 0.0, V0)
+
+# Waves
+psi_inc = np.exp(1j * k1 * x_left)
+psi_ref = r * np.exp(-1j * k1 * x_left)
+psi_i_total = psi_inc + psi_ref
+psi_trans = t * np.exp(1j * k2 * x_right)
+
+# Plot
+fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+
+# Panel 1: Potential step
+axes[0].plot(x_all, V_all, linewidth=2.5, label=r"$V(x)$")
+axes[0].axhline(E, linestyle="--", label=r"$E={E} \mathrm{{eV}}$")
+axes[0].axvline(0, linestyle=":", label=r"$x=0$")
+
+axes[0].text(-2.2, 0.08, "Region I\n$V=0$", ha="center")
+axes[0].text(1.8, 1.08, "Region II\n$V=V_0$", ha="center")
+
+axes[0].set_ylabel("Energy (eV)")
+axes[0].set_title("Upward Potential Step")
+axes[0].set_ylim(-0.2, 2.4)
+axes[0].grid(True, alpha=0.3)
+axes[0].legend(loc="upper left")
+
+# Panel 2: Incident, reflected, and transmitted waves
+axes[1].plot(x_left, np.real(psi_inc), linestyle="--", 
+label="incident wave")
+axes[1].plot(x_left, np.real(psi_ref), linestyle=":", 
+label="reflected wave")
+axes[1].plot(x_left, np.real(psi_i_total), linewidth=2, 
+label="total wave in Region I")
+axes[1].plot(x_right, np.real(psi_trans), linewidth=2, 
+label="transmitted wave in Region II")
+
+axes[1].axvline(0, linestyle=":", label=r"$x=0$")
+axes[1].set_xlabel("Position x (nm)")
+axes[1].set_ylabel(r"Real part of $\psi(x)$")
+axes[1].set_title("Wave Behavior at the Potential Step")
+axes[1].grid(True, alpha=0.3)
+axes[1].legend(loc="upper right")
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+# Plot the potential step and then R, T for the same potential step
+
+V0 = 1.0  # eV
+
+# ----------------------------------------------------
+# Figure 1: Potential step V(x)
+# ----------------------------------------------------
+
+x_values = np.linspace(-2.0, 2.0, 600)  # arbitrary position axis
+V_values = np.where(x_values < 0, 0.0, V0)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(x_values, V_values, linewidth=2.5, label=r"$V(x)$")
+plt.axvline(0, linestyle="--", label=r"$x=0$")
+
+# Example incident energies
+plt.axhline(0.5, linestyle=":", label=r"$E=0.5 \mathrm{eV}<V_0$")
+plt.axhline(2.0, linestyle="-.", label=r"$E=2.0 \mathrm{eV}>V_0$")
+
+plt.text(-1.5, 0.08, "Region I\n$V=0$", ha="center")
+plt.text(1.2, 1.08, "Region II\n$V=V_0=1.0$ eV", ha="center")
+plt.text(0.08, 0.52, "classically\nforbidden\nfor $E=0.5$ eV", fontsize=9)
+plt.text(0.08, 2.05, "allowed for\n$E=2.0$ eV", fontsize=9)
+
+plt.xlabel("Position x")
+plt.ylabel("Potential energy V(x) (eV)")
+plt.title("Upward Potential Step")
+plt.ylim(-0.1, 2.3)
+plt.grid(True, alpha=0.3)
+plt.legend(loc="upper left")
+plt.show()
+
+# ----------------------------------------------------
+# Figure 2: Reflection and transmission coefficients
+# ----------------------------------------------------
+
+E_values = np.linspace(0.05, 4.0, 600)
+R_values, T_values, penetration_lengths = step_RT(E_values, V0)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, R_values, label="R")
+plt.plot(E_values, T_values, label="T")
+plt.axvline(V0, linestyle="--", label=r"$E=V_0$")
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Coefficient")
+plt.title("Potential Step: Reflection and Transmission")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 3 – Square Potential Barrier: Transmission Function
+
+```{python}
+def barrier_T(E, V0, a):
+    """
+    Transmission coefficient for a square potential barrier.
+
+    Energies are in eV and width a is in nm.
+
+    This version supports:
+    - scalar E and scalar a,
+    - array E and scalar a,
+    - scalar E and array a,
+    - broadcast-compatible arrays E and a.
+    """
+    E_arr, a_arr = np.broadcast_arrays(np.asarray(E, dtype=float), 
+    np.asarray(a, dtype=float))
+    T = np.zeros_like(E_arr, dtype=float)
+
+    below = E_arr < V0
+    above = E_arr > V0
+    equal = np.isclose(E_arr, V0)
+
+    if np.any(below):
+        Eb = E_arr[below]
+        ab = a_arr[below]
+        kappa = np.sqrt((V0 - Eb) / HBAR2_OVER_2ME)
+        factor = (V0**2 * np.sinh(kappa*ab)**2) / (4*Eb*(V0 - Eb))
+        T[below] = 1 / (1 + factor)
+
+    if np.any(above):
+        Ea = E_arr[above]
+        aa = a_arr[above]
+        q = np.sqrt((Ea - V0) / HBAR2_OVER_2ME)
+        factor = (V0**2 * np.sin(q*aa)**2) / (4*Ea*(Ea - V0))
+        T[above] = 1 / (1 + factor)
+
+    if np.any(equal):
+        ae = a_arr[equal]
+        # Limit at E=V0 for a rectangular barrier:
+        # T = [1 + V0*a**2/(4*(hbar^2/2m))]^-1
+        factor_equal = V0 * ae**2 / (4 * HBAR2_OVER_2ME)
+        T[equal] = 1 / (1 + factor_equal)
+
+    if np.isscalar(E) and np.isscalar(a):
+        return float(T)
+
+    return T
+```
+
+## Step 4 – Square Barrier: Width Dependence
+
+```{python}
+# Barrier transmission as a function of barrier width
+E = 0.8  # eV
+V0 = 1.2  # eV
+a_values = np.linspace(0.1, 2.0, 500)
+T_values = barrier_T(E, V0, a_values)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(a_values, T_values)
+plt.xlabel("Barrier width a (nm)")
+plt.ylabel("Transmission coefficient T")
+plt.title(r"Square Barrier: $T$ vs Width for $E<V_0$")
+plt.grid(True, alpha=0.3)
+plt.show()
+
+print(f"T(a=0.1 nm) = {barrier_T(E, V0, 0.1):.5e}")
+print(f"T(a=1.0 nm) = {barrier_T(E, V0, 1.0):.5e}")
+print(f"T(a=2.0 nm) = {barrier_T(E, V0, 2.0):.5e}")
+```
+
+## Step 5 – Square Barrier: Energy Dependence
+
+```{python}
+# Barrier transmission as a function of incident energy
+V0 = 1.2  # eV
+a = 1.0   # nm
+E_values = np.linspace(0.05, 3.0, 1000)
+T_values = barrier_T(E_values, V0, a)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, T_values)
+plt.axvline(V0, linestyle="--", label=r"$E=V_0$")
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Square Barrier: Transmission vs Energy")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 6 – Evanescent Wave Inside a Barrier
+
+```{python}
+def kappa_barrier(E, V0):
+    """Decay constant kappa in nm^-1 for E < V0."""
+    if E >= V0:
+        raise ValueError("kappa is real only for E < V0.")
+    return np.sqrt((V0 - E) / HBAR2_OVER_2ME)
+
+E = 0.8
+V0 = 1.2
+kappa = kappa_barrier(E, V0)
+
+x = np.linspace(0, 1.5, 500)
+psi_abs = np.exp(-kappa*x)
+prob_density = psi_abs**2
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(x, psi_abs, label=r"$|\psi(x)|\sim e^{-\kappa x}$")
+plt.plot(x, prob_density, label=r"$|\psi(x)|^2\sim e^{-2\kappa x}$")
+plt.xlabel("Position inside barrier x (nm)")
+plt.ylabel("Relative amplitude / probability density")
+plt.title("Evanescent Decay Inside a Barrier")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+print(f"kappa = {kappa:.4f} nm^-1")
+print(f"Penetration length 1/kappa = {1/kappa:.4f} nm")
+```
+
+## Step 7 – Alpha Decay: Turning Points and WKB Factor
+
+```{python, echo=TRUE, eval=TRUE, message=FALSE, warning=FALSE}
+def alpha_radius(Ad):
+    """Approximate contact radius for daughter + alpha in fm."""
+    return 1.2*(Ad**(1/3) + 4**(1/3))
+
+def coulomb_alpha_potential(r, Zd):
+    """Coulomb potential outside the nucleus in MeV."""
+    return 2*Zd*E2/r
+
+def alpha_outer_turning_point(Ealpha, Zd):
+    """Outer turning point r2 in fm."""
+    return 2*Zd*E2/Ealpha
+
+def alpha_barrier(Ealpha, Zd, Ad, N=10000):
+    """
+    Compute WKB action factor G and transmission estimate T for alpha decay.
+
+    Ealpha : alpha-particle kinetic energy in MeV
+    Zd     : daughter nuclear charge
+    Ad     : daughter mass number
+    """
+    R = alpha_radius(Ad)
+    r2 = alpha_outer_turning_point(Ealpha, Zd)
+
+    if r2 <= R:
+        return R, r2, 0.0, 1.0
+
+    r = np.linspace(R, r2, N)
+    V = coulomb_alpha_potential(r, Zd)
+    kappa = np.sqrt(2*M_ALPHA_C2*(V - Ealpha)) / HBAR_C
+
+    G = np.trapezoid(kappa, r)
+    T = np.exp(-2*G)
+
+    return R, r2, G, T
+
+# Example similar to alpha decay from a heavy nucleus
+Zd = 90
+Ad = 234
+Ealpha = 4.27  # MeV
+
+R, r2, G, T = alpha_barrier(Ealpha, Zd, Ad)
+
+print("Alpha decay WKB estimate")
+print(f"Zd = {Zd}, Ad = {Ad}, E_alpha = {Ealpha:.2f} MeV")
+print(f"Nuclear contact radius R = {R:.3f} fm")
+print(f"Outer turning point r2 = {r2:.3f} fm")
+print(f"WKB factor G = {G:.3f}")
+print(f"Transmission estimate T = exp(-2G) = {T:.3e}")
+```
+
+## Step 8 – Alpha Decay: Coloumb Barrier Plot
+
+```{python}
+# Plot Coulomb barrier and alpha energy
+Zd = 90
+Ad = 234
+Ealpha = 4.27
+
+R, r2, G, T = alpha_barrier(Ealpha, Zd, Ad)
+r = np.linspace(R, r2*1.15, 1000)
+V = coulomb_alpha_potential(r, Zd)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(r, V, label=r"Coulomb barrier $V(r)$")
+plt.axhline(Ealpha, linestyle="--", label=r"$E_\alpha$")
+plt.axvline(R, linestyle=":", label=r"$R$")
+plt.axvline(r2, linestyle=":", label=r"$r_2$")
+plt.xlabel("Radius r (fm)")
+plt.ylabel("Energy (MeV)")
+plt.title("Alpha Decay: Coulomb Barrier and Turning Points")
+plt.ylim(0, max(V)*1.05)
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 9 – Half-Life Sensitivity and the Geiger--Nuttall Trend
+
+```{python}
+Zd = 90
+Ad = 234
+Ealphas = np.array([4.0, 4.5, 5.0, 5.5, 6.0])
+
+rows = []
+for Ealpha in Ealphas:
+    R, r2, G, T = alpha_barrier(Ealpha, Zd, Ad)
+    rows.append((Ealpha, R, r2, G, T, np.log10(1/T)))
+
+print("E_alpha (MeV) | R (fm) | r2 (fm) | G | T | log10(1/T)")
+for row in rows:
+    print(f"{row[0]:10.2f} | {row[1]:6.2f} | {row[2]:7.2f} | {row[3]:6.2f} |" 
+    f"{row[4]:.3e} | {row[5]:10.3f}")
+
+x = 1/np.sqrt(Ealphas)
+y = np.array([row[5] for row in rows])
+
+coef = np.polyfit(x, y, 1)
+fit = np.polyval(coef, x)
+
+plt.figure(figsize=(7, 4.5))
+plt.scatter(x, y, label="WKB data")
+plt.plot(x, fit, label="Linear fit")
+plt.xlabel(r"$1/\sqrt{E_\alpha}$ ($\mathrm{MeV^{-1/2}}$)")
+plt.ylabel(r"$\log_{10}(1/T)$")
+plt.title("Geiger--Nuttall-like Trend from WKB Tunneling")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+
+print(f"Linear fit: log10(1/T) $\\approx$ {coef[0]:.3f}*(1/sqrt(E_alpha)) +"
+f"{coef[1]:.3f}")
+```
+
+## Step 10 – Boundary Conditions for Barriers and Wells
+
+## Step 11 – Square Potential Well: Transmission Coefficient
+
+```{python}
+def well_T(E, V0, a):
+    """
+    Transmission coefficient for an attractive square potential well.
+
+    V(x) = -V0 inside the well.
+    Energies are in eV and width a is in nm.
+
+    This version supports scalar or broadcast-compatible array inputs.
+    """
+    E_arr, a_arr = np.broadcast_arrays(np.asarray(E, dtype=float), 
+    np.asarray(a, dtype=float))
+    q = np.sqrt((E_arr + V0) / HBAR2_OVER_2ME)
+    factor = (V0**2 * np.sin(q*a_arr)**2) / (4*E_arr*(E_arr + V0))
+    T = 1 / (1 + factor)
+
+    if np.isscalar(E) and np.isscalar(a):
+        return float(T)
+
+    return T
+
+# Plot T(E) for a square well
+V0 = 4.0
+a = 1.0
+E_values = np.linspace(0.05, 10.0, 2000)
+T_values = well_T(E_values, V0, a)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, T_values)
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Square Potential Well: Transmission Resonances")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+## Step 12 – Resonant Transmission Energies
+
+```{python}
+def well_resonant_energies(V0, a, nmax=20):
+    """Positive resonant energies for an attractive square well."""
+    resonances = []
+    for n in range(1, nmax+1):
+        En = HBAR2_OVER_2ME*(n*np.pi/a)**2 - V0
+        if En > 0:
+            resonances.append((n, En))
+    return resonances
+
+V0 = 4.0
+a = 1.0
+resonances = well_resonant_energies(V0, a, nmax=20)
+
+print("Positive resonant energies for the square well:")
+print("n | E_n (eV) | T(E_n)")
+for n, En in resonances:
+    print(f"{n:2d} | {En:8.4f} | {well_T(En, V0, a):.8f}")
+
+# Plot with resonance markers
+E_values = np.linspace(0.05, 14.0, 2500)
+T_values = well_T(E_values, V0, a)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, T_values, label="T(E)")
+for n, En in resonances:
+    if En <= E_values.max():
+        plt.axvline(En, linestyle=":", alpha=0.7)
+        plt.text(En, 0.05, f"n={n}", rotation=90, va="bottom", ha="right")
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title(r"Square Well Resonances: $qa = n\pi$")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 13 – Comparing a Barrier and a Well
+
+```{python}
+# Direct comparison of barrier and well transmission
+a = 1.0
+V0 = 2.0
+E_values = np.linspace(0.05, 8.0, 2000)
+
+T_barrier = barrier_T(E_values, V0, a)
+T_well = well_T(E_values, V0, a)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, T_barrier, label="Barrier, +V0")
+plt.plot(E_values, T_well, label="Well, -V0")
+plt.axvline(V0, linestyle="--", label=r"$E=V_0$ for barrier")
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Barrier vs Well Transmission")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.show()
+```
+
+## Step 14 – Time-Dependent Wave-Packet Dynamics
+
+```{python}
+HBAR_EV_FS = 0.6582119569  # eV fs
+
+def normalize_wavefunction(psi, dx):
+    norm = np.sqrt(np.sum(np.abs(psi)**2)*dx)
+    return psi/norm
+
+def gaussian_packet(x, x0, sigma_x, k0):
+    """
+    Gaussian wave packet:
+    psi(x,0) = A exp[-(x-x0)^2/(4 sigma_x^2)] exp(i k0 x)
+    """
+    psi = np.exp(-(x-x0)**2/(4*sigma_x**2)) * np.exp(1j*k0*x)
+    dx = x[1] - x[0]
+    return normalize_wavefunction(psi, dx)
+
+def region_probabilities(x, psi, left_boundary, right_boundary):
+    dx = x[1] - x[0]
+    prob = np.abs(psi)**2
+    P_left = np.sum(prob[x < left_boundary])*dx
+    P_middle = np.sum(prob[(x >= left_boundary) & (x <= right_boundary)])*dx
+    P_right = np.sum(prob[x > right_boundary])*dx
+    return P_left, P_middle, P_right
+
+def split_operator_evolve(x, psi0, Vx, dt_fs, nsteps, snapshots=8):
+    """
+    Split-operator evolution for a 1D wave packet.
+
+    x       : grid in nm
+    psi0    : normalized wave function
+    Vx      : potential in eV
+    dt_fs   : time step in fs
+    nsteps  : number of time steps
+    """
+    dx = x[1] - x[0]
+    N = len(x)
+
+    k = 2*np.pi*np.fft.fftfreq(N, d=dx)  # nm^-1
+    Ek = HBAR2_OVER_2ME * k**2          # eV
+
+    phase_V_half = np.exp(-1j * Vx * dt_fs/(2*HBAR_EV_FS))
+    phase_K = np.exp(-1j * Ek * dt_fs/HBAR_EV_FS)
+
+    psi = psi0.copy()
+
+    snap_indices = np.linspace(0, nsteps, snapshots, dtype=int)
+    saved = {0: psi.copy()}
+
+    for step in range(1, nsteps+1):
+        psi = phase_V_half * psi
+        psi_k = np.fft.fft(psi)
+        psi_k = phase_K * psi_k
+        psi = np.fft.ifft(psi_k)
+        psi = phase_V_half * psi
+
+        # Renormalize gently to remove numerical drift
+        psi = normalize_wavefunction(psi, dx)
+
+        if step in snap_indices:
+            saved[step] = psi.copy()
+
+    return saved
+```
+
+## Step 15 – Wave Packet Through a Square Barrier
+
+```{python}
+# Example time-dependent simulation:Gaussian packet incident on square barrier
+
+# Spatial grid
+x_min, x_max = -80.0, 120.0  # nm
+N = 4096
+x = np.linspace(x_min, x_max, N)
+dx = x[1] - x[0]
+
+# Wave packet parameters
+x0 = -45.0          # nm
+sigma_x = 5.0       # nm
+E0 = 0.8            # eV, mean kinetic energy
+k0 = np.sqrt(E0/HBAR2_OVER_2ME)  # nm^-1
+psi0 = gaussian_packet(x, x0, sigma_x, k0)
+
+# Barrier potential
+V0 = 1.2            # eV
+a = 3.0             # nm
+left_edge = 0.0
+right_edge = a
+
+V_barrier = np.zeros_like(x)
+V_barrier[(x >= left_edge) & (x <= right_edge)] = V0
+
+# Time evolution
+dt_fs = 0.08
+nsteps = 4500
+saved = split_operator_evolve(x, psi0, V_barrier, dt_fs, nsteps, snapshots=7)
+
+# Plot snapshots
+plt.figure(figsize=(8, 5))
+scale = 0.8/np.max(V_barrier) if np.max(V_barrier) > 0 else 1
+plt.plot(x, V_barrier*scale, label="scaled barrier potential")
+
+for step, psi in saved.items():
+    t = step*dt_fs
+    plt.plot(x, np.abs(psi)**2, label=f"t={t:.0f} fs")
+
+plt.xlabel("x (nm)")
+plt.ylabel(r"$|\psi(x,t)|^2$ and scaled potential")
+plt.xlim(-60, 80)
+plt.grid(True, alpha=0.3)
+plt.legend(fontsize=8)
+plt.show()
+
+# Final probabilities
+final_step = max(saved.keys())
+psi_final = saved[final_step]
+P_left, P_middle, P_right = region_probabilities(x, psi_final, left_edge, 
+right_edge)
+
+print("Approximate final probabilities:")
+print(f"Reflected region P_left   = {P_left:.4f}")
+print(f"Barrier region P_middle   = {P_middle:.4f}")
+print(f"Transmitted region P_right = {P_right:.4f}")
+print(f"Total probability         = {P_left + P_middle + P_right:.4f}")
+```
+
+## Step 16 – Wave Packet Scattering from an Attractive Well
+
+```{python}
+# comparison: wave packet incident on an attractive square well
+
+V0 = 1.2        # eV
+a = 6.0         # nm
+left_edge = 0.0
+right_edge = a
+
+V_well = np.zeros_like(x)
+V_well[(x >= left_edge) & (x <= right_edge)] = -V0
+
+# Same incoming packet
+psi0 = gaussian_packet(x, x0, sigma_x, k0)
+
+saved_well = split_operator_evolve(x, psi0, V_well, dt_fs, nsteps, 
+snapshots=7)
+
+plt.figure(figsize=(8, 5))
+scale = 0.25
+plt.plot(x, V_well*scale, label="scaled well potential")
+
+for step, psi in saved_well.items():
+    t = step*dt_fs
+    plt.plot(x, np.abs(psi)**2, label=f"t={t:.0f} fs")
+
+plt.xlabel("x (nm)")
+plt.ylabel(r"$|\psi(x,t)|^2$ and scaled potential")
+plt.title("Wave Packet Scattering from an Attractive Square Well")
+plt.xlim(-60, 90)
+plt.grid(True, alpha=0.3)
+plt.legend(fontsize=8)
+plt.show()
+
+final_step = max(saved_well.keys())
+psi_final = saved_well[final_step]
+P_left, P_middle, P_right = region_probabilities(x, psi_final, left_edge, 
+right_edge)
+
+print("Approximate final probabilities for the well:")
+print(f"Reflected region P_left   = {P_left:.4f}")
+print(f"Well region P_middle   = {P_middle:.4f}")
+print(f"Transmitted region P_right = {P_right:.4f}")
+print(f"Total probability         = {P_left + P_middle + P_right:.4f}")
+```
+
+## Step 17 – Final Problem for the Student
+
+### Step 1 – Define the design parameters
+
+```{python}
+# Step 1 — Define the design parameters
+E_target = 2.0  # eV
+V0 = 5.0        # eV
+n_target = 1
+```
+
+### Step 2 – Compute the wave number inside the well
+
+```{python}
+# Step 2 — Compute the wave number inside the well
+q_target = np.sqrt((E_target + V0) / HBAR2_OVER_2ME)
+
+print(f"Target energy E_target = {E_target} eV")
+print(f"Well depth V0 = {V0} eV")
+print(f"Chosen resonance n = {n_target}")
+print(f"q_target = {q_target:.4f} nm^-1")
+```
+
+### Step 3 – Compute the designed well width
+
+```{python}
+# Step 3 — Compute the designed well width
+a_design = n_target * np.pi / q_target
+
+print(f"Required well width a = {a_design:.4f} nm")
+```
+
+### Step 4 – Verify the transmission at the target energy
+
+```{python}
+# Step 4 — Verify the transmission at the target energy
+T_target = well_T(E_target, V0, a_design)
+
+print(f"T(E_target) = {T_target:.8f}")
+```
+
+### Step 5 – Plot the designed square well potential
+
+```{python}
+# Step 5 — Plot the designed square well potential
+x_values = np.linspace(-1.0, a_design + 1.0, 1000)
+V_values = np.where((x_values >= 0) & (x_values <= a_design), -V0, 0.0)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(x_values, V_values, linewidth=2.5, label=r"$V(x)$")
+plt.axhline(E_target, linestyle="--", label=r"$E_\mathrm{target}$")
+plt.axvline(0, linestyle=":", label=r"$x = 0$")
+plt.axvline(a_design, linestyle=":", label=r"$x = a$")
+
+plt.xlabel("Position x (nm)")
+plt.ylabel("Energy (eV)")
+plt.title("Designed Attractive Square Well")
+plt.ylim(-V0 - 1.0, E_target + 2.0)
+plt.grid(True, alpha=0.3)
+plt.legend(loc="upper right")
+plt.show()
+```
+
+### Step 6 – Plot transmission near the target energy
+
+```{python}
+# Step 6 — Plot transmission near the target energy
+E_values = np.linspace(0.1, 8.0, 2000)
+T_values = well_T(E_values, V0, a_design)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values, T_values, label="T(E)")
+plt.axvline(E_target, linestyle="--", color="red", 
+label=r"$E_\mathrm{target}$")
+plt.scatter([E_target], [T_target], color="red", zorder=5, 
+label=r"$(E_\mathrm{target}, T_\mathrm{target})$")
+
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Transmission Near the Target Resonance")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend(loc="upper right")
+plt.show()
+```
+
+### Step 7 – Compute additional resonant energies
+
+```{python}
+# Step 7 — Compute additional resonant energies
+resonances = []
+nmax = 20
+
+for n in range(1, nmax + 1):
+    En = HBAR2_OVER_2ME * (n * np.pi / a_design)**2 - V0
+    if En > 0:
+        Tn = well_T(En, V0, a_design)
+        resonances.append((n, En, Tn))
+
+print("Positive resonant energies for the designed well:")
+print("n | E_n (eV) | T(E_n)")
+for n, En, Tn in resonances:
+    print(f"{n:2d} | {En:8.4f} | {Tn:.8f}")
+```
+
+### Step 8 – Make a wider transmission plot
+
+```{python}
+# Step 8 — Make a wider transmission plot
+E_values_wide = np.linspace(0.1, 25.0, 3000)
+T_values_wide = well_T(E_values_wide, V0, a_design)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values_wide, T_values_wide, label="T(E)")
+
+for n, En, Tn in resonances:
+    if En <= E_values_wide.max():
+        plt.axvline(En, linestyle=":", alpha=0.7)
+        plt.text(En, 0.05, f"n={n}", rotation=90, va="bottom", ha="right")
+
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Additional Resonances of the Designed Square Well")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend(loc="upper right")
+plt.show()
+```
+
+### Step 9 – Test sensitivity to the well width
+
+```{python}
+# Step 9 — Test sensitivity to the well width
+width_1 = 0.95 * a_design
+width_2 = a_design
+width_3 = 1.05 * a_design
+
+E_values_sens = np.linspace(0.1, 8.0, 2000)
+T_1 = well_T(E_values_sens, V0, width_1)
+T_2 = well_T(E_values_sens, V0, width_2)
+T_3 = well_T(E_values_sens, V0, width_3)
+
+plt.figure(figsize=(7, 4.5))
+plt.plot(E_values_sens, T_1, label=r"$0.95a$")
+plt.plot(E_values_sens, T_2, label=r"$a$")
+plt.plot(E_values_sens, T_3, label=r"$1.05a$")
+plt.axvline(E_target, linestyle="--", color="red", 
+label=r"$E_\mathrm{target}$")
+
+plt.xlabel("Incident energy E (eV)")
+plt.ylabel("Transmission coefficient T")
+plt.title("Effect of Changing the Well Width")
+plt.ylim(-0.05, 1.05)
+plt.grid(True, alpha=0.3)
+plt.legend(loc="upper right")
+plt.show()
+```
+
+### Step 10 – Written Interpretation
+
+1. Why does the designed well give $T(E_{\text{target}}) \approx 1$?
+
+The well width $a_{\text{design}}$ was calculated specifically so that at energy $E_{\text{target}} = 2.0\text{ eV}$ and potential depth $V_0 = 5.0\text{ eV}$, the internal wave vector $q_{\text{target}}$ satisfies the condition $q_{\text{target}} a_{\text{design}} = n\pi$ for $n = 1$. Under this condition, $\sin(q a) = 0$, which causes the second term in the denominator of the transmission function $T(E) = \left[1 + \frac{V_0^2 \sin^2(qa)}{4E(E + V_0)}\right]^{-1}$ to vanish completely. Physically, the partial waves reflected at $x = 0$ and $x = a$ interfere completely destructively, leading to zero net reflection ($R = 0$) and perfect transmission ($T = 1$).  
+
+2. Why do resonances occur only at special energies?
+
+Resonance requires an integer number of half-wavelengths inside the well, expressed by the phase condition $qa = n\pi$ ($n = 1, 2, 3, \dots$). Because the wave number inside the well $q = \sqrt{\frac{2m(E + V_0)}{\hbar^2}}$ is a continuous function of energy $E$, the condition $qa = n\pi$ is satisfied only at discrete values of energy $E_n = \frac{\hbar^2 n^2 \pi^2}{2m a^2} - V_0$. 
+
+3. Why does changing the well width shift the resonance?
+
+The resonance depends directly on the total phase accumulated across the well, $\phi = qa$. Modifying the width $a$ alters this accumulated phase for a given energy. To maintain the resonance condition $qa = n\pi$, the wave vector $q$ must change to compensate. Decreasing the width ($0.95a$) requires a larger wave vector $q$, shifting the resonant peak to a higher energy. Increasing the width ($1.05a$) requires a smaller wave vector $q$, shifting the resonant peak to a lower energy. 
+
+4. How does this example show that quantum transmission depends on phase and interference, not only on energy?
+
+Classically, a particle passing over an attractive potential well ($V_0 > 0$) gains kinetic energy while inside and always reaches the other side regardless of the width $a$. In quantum mechanics, incoming waves reflect at both potential boundaries ($x = 0$ and $x = a$). At a fixed energy $E_{\text{target}}$, slight changes in width (e.g., $0.95a$ or $1.05a$) alter the phase accumulated by the wave inside the well without altering $E_{\text{target}}$, destroying destructive interference in reflection and significantly lowering transmission ($T < 1$). This demonstrates that quantum transmission is governed by wave phase accumulation and wave interference, not merely energy conservation.  

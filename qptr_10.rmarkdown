@@ -1,0 +1,483 @@
+---
+title: "The Schrödinger Equation. Time Evolution, Probability Conservation, Stationary States, and Ehrenfest's Theorem"
+format: pdf
+editor: visual
+---
+
+## Step 0 – Imports, physical constants, and unit conventions 
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+try:
+  import qutip as qt
+except Exception as exc:
+  raise ImportError(
+    "QuTiP is required for this lab. Install it with: pip install qutip"   
+) from exc
+
+plt.rcParams["figure.figsize"] = (7,4)
+plt.rcParams["axes.grid"] = True
+plt.rcParams["font.size"] = 11
+
+#-----------------------------------------------------------------------------
+# Fundamental constants in SI units
+#-----------------------------------------------------------------------------
+
+hbar = 1.054571817e-34    # reduced Planck constant, J s
+m_e = 9.1093837015e-31    # electron mass, kg
+eC = 1.602176634e-19      # elementary charge, C
+
+#-----------------------------------------------------------------------------
+# Useful unit conversions
+#-----------------------------------------------------------------------------
+
+nm = 1e-9                # 1 nm in meters
+fs = 1e-15               # 1 fs in seconds
+eV = eC                  # 1 eV in joules
+
+print("Physical constants and unit conversions")
+print("---------------------------------------")
+print(f"hbar = {hbar:.6e} J s")
+print(f"m_e = {m_e:.6e} kg")
+print(f"1 nm = {nm:.1e} m")
+print(f"1 fs = {fs:.1e} s")
+print(f"1 eV = {eV:.6e} J")
+print(f"QuTiP version = {qt.__version__}")
+```
+
+## Step 1 – Spatial grid an time grid
+
+```{python}
+#-----------------------------------------------------------------------------
+# Spatial grid
+#-----------------------------------------------------------------------------
+N = 512
+x_min = -80.0 * nm
+x_max = 80.0 * nm
+x = np.linspace(x_min, x_max, N)
+dx = x[1] - x[0]
+
+#-----------------------------------------------------------------------------
+# Time grid for free-particle evolution
+#-----------------------------------------------------------------------------
+t_max = 45.0 * fs
+n_t = 181
+tlist = np.linspace(0.0, t_max, n_t)
+
+print("Grid information")
+print("----------------")
+print(f"N = {N}")
+print(f"x range = [{x_min/nm:.1f}, {x_max/nm:.1f}] nm")
+print(f"dx = {dx/nm:.4f} nm")
+print(f"t range = [0, {t_max/fs:.1f}] fs")
+print(f"Number of time points = {n_t}")
+```
+
+## Step 2 – Helper functions
+
+```{python}
+def normalize_on_grid(psi_x, dx):
+    """
+    Normalize psi(x) using the discrete approximation:
+        integral |psi(x)|^2 dx ~= sum |psi_j|^2 dx.
+    """
+    norm = np.sqrt(np.sum(np.abs(psi_x)**2) * dx)
+    if norm == 0:
+        raise ValueError("Cannot normalize a zero wave function.")
+    return psi_x / norm
+
+
+def ket_from_psi(psi_x, dx):
+    """
+    Convert a grid wave function psi(x) into a QuTiP ket.
+
+    The factor sqrt(dx) ensures that the QuTiP vector norm corresponds
+    to the continuous integral normalization.
+    """
+    vec = np.asarray(psi_x, dtype=complex) * np.sqrt(dx)
+    return qt.Qobj(vec.reshape((len(vec), 1)))
+  
+  
+def psi_from_ket(ket, dx):
+    """
+    Convert a QuTiP ket into a grid wave function psi(x).
+    
+    Dividing by sqrt(dx) reverses the scaling factor applied in ket_from_psi
+    to match the continuous integral normalization.
+    """
+    vec = np.asarray(ket.full()).flatten()
+    return vec / np.sqrt(dx)  
+
+
+def grid_probability(psi_x, dx):
+    """
+    Discrete approximation to integral |psi(x)|^2 dx.
+    """
+    return np.sum(np.abs(psi_x)**2) * dx
+
+
+def expectation_and_std(ket, op):
+    """
+    Compute the expectation value and standard deviation of an operator.
+    """
+    mean = np.real(qt.expect(op, ket))
+    mean2 = np.real(qt.expect(op * op, ket))
+    variance = max(mean2 - mean**2, 0.0)
+    return mean, np.sqrt(variance)
+
+
+def plot_density_nm(x_m, psi_x, title="", label=None):
+    """
+    Plot |psi(x)|^2 using x in nm and density in 1/nm.
+
+    Since |psi|^2 is stored in units of 1/m, multiplying by nm converts it
+    to units of 1/nm for plotting.
+    """
+    density_per_nm = np.abs(psi_x)**2 * nm
+
+    plt.figure()
+    plt.plot(x_m / nm, density_per_nm, label=label)
+    plt.xlabel("x (nm)")
+    plt.ylabel(r"$|\psi(x)|^2$ (1/nm)")
+    plt.title(title)
+    if label is not None:
+        plt.legend()
+    plt.show()
+```
+
+## Step 3 – Operators on the grid
+
+```{python}
+#-----------------------------------------------------------------------------
+# Position Operator
+#-----------------------------------------------------------------------------
+x_op = qt.Qobj(np.diag(x))    # meters
+
+# ----------------------------------------------------------------------------
+# First derivative matrix, central difference
+# This matrix is antisymmetric, so -i*hbar*D1 is Hermitian.
+# ----------------------------------------------------------------------------
+D1 = np.zeros((N, N), dtype=complex)
+for i in range(N - 1):
+    D1[i, i + 1] = 1.0 / (2.0 * dx)
+    D1[i + 1, i] = -1.0 / (2.0 * dx)
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Second derivative matrix, central difference
+# Symmetric tridiagonal form with Dirichlet-like endpoints.
+# ----------------------------------------------------------------------------
+D2 = np.zeros((N, N), dtype=complex)
+for i in range(N):
+    D2[i, i] = -2.0 / (dx**2)
+    if i < N - 1:
+        D2[i, i + 1] = 1.0 / (dx**2)
+        D2[i + 1, i] = 1.0 / (dx**2)
+
+D2 = qt.Qobj(D2)
+```
+
+```{python}
+#-----------------------------------------------------------------------------
+# Quantum Operators
+#-----------------------------------------------------------------------------
+p_op = qt.Qobj(-1j * hbar * D1)                  # kg m/s
+T_op = qt.Qobj(-(hbar**2) / (2.0 * m_e) *D2)     # joules
+
+print("Operators constructed")
+print("---------------------")
+print("x_op dimensions:", x_op.dims)
+print("p_op dimensions:", p_op.dims)
+print("T_op dimensions:", T_op.dims)
+
+print("\nHermiticity checks")
+print("--------------------")
+print("||p - p.dag()|| =", (p_op - p_op.dag()).norm())
+print("||T - T.dag()|| =", (T_op - T_op.dag()).norm())
+```
+
+## Step 4 – Initial Gaussian electron wave packet
+
+```{python}
+def gaussian_packet(x_m, x0_m, sigma_x_m, k0_per_m):
+    # Step 1: Build the Gaussian envelope
+    envelope = np.exp(-((x_m - x0_m)**2) / (4.0 * sigma_x_m**2))
+    
+    # Step 2: Build the plane-wave carrier
+    carrier = np.exp(1j * k0_per_m * x_m)
+    
+    # Step 3: Multiply envelope and carrier
+    psi_x = envelope * carrier
+    
+    return psi_x
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Initial packet parameters
+# ----------------------------------------------------------------------------
+
+# Step 1: Define the initial position of the packet
+x0 = -25.0 * nm
+
+# Step 2: Define the spatial width of the Gaussian envelope
+sigma_x = 4.0 * nm
+
+# Step 3: Define the mean wave number of the carrier wave
+k0 = 1.2e9  # units: 1/m
+
+# Step 4: Compute the associated de Broglie wavelength
+lambda_deBroglie = 2 * np.pi / k0
+
+# ----------------------------------------------------------------------------
+# Build and normalize the initial wave packet
+# ----------------------------------------------------------------------------
+
+# Step 5: Build the Gaussian-modulated plane wave on the spatial grid
+psi0_x = gaussian_packet(x, x0, sigma_x, k0)
+
+# Step 6: Normalize the wave function on the grid
+# This enforces the condition: sum |psi_j|^2 dx approximately equal to 1
+psi0_x = normalize_on_grid(psi0_x, dx)
+
+# Step 7: Convert the grid wave function into a QuTiP ket
+# QuTiP is used here to represent the quantum state
+psi0_ket = ket_from_psi(psi0_x, dx)
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Initial expectation values
+# ----------------------------------------------------------------------------
+
+# Step 8: Compute the expectation value and uncertainty of position
+# QuTiP is used inside expectation_and_std
+x_mean0, Delta_x0 = expectation_and_std(psi0_ket, x_op)
+
+# Step 9: Compute the expectation value and uncertainty of momentum
+# QuTiP is used inside expectation_and_std
+p_mean0, Delta_p0 = expectation_and_std(psi0_ket, p_op)
+
+# Step 10: Compute the expectation value of the kinetic energy
+# QuTiP is used directly through qt.expect
+E_kin0 = np.real(qt.expect(T_op, psi0_ket))
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Print the main physical quantities
+# ----------------------------------------------------------------------------
+
+print("Initial Gaussian packet")
+print(f"de Broglie wavelength = {lambda_deBroglie / nm:.4f} nm")
+print(f"Initial normalization = {grid_probability(psi0_x, dx):.8f}")
+print(f"<x>(0)  = {x_mean0 / nm:.6f} nm")
+print(f"Delta x = {Delta_x0 / nm:.6f} nm")
+print(f"<p>(0)  = {p_mean0:.6e} kg m/s")
+print(f"Delta p = {Delta_p0:.6e} kg m/s")
+print(f"<T>(0)  = {E_kin0 / eV:.5f} eV")
+print(f"<p>/m_e = {p_mean0 / m_e:.3e} m/s")
+print(f"Delta x * Delta p / hbar = {(Delta_x0 * Delta_p0) / hbar:.6f}")
+
+# ----------------------------------------------------------------------------
+# Plot the initial probability density
+# ----------------------------------------------------------------------------
+
+# Step 11: Plot |psi0(x)|^2 as a function of position
+plot_density_nm(x, psi0_x, "Initial Gaussian electron wave packet")
+```
+
+## Step 5 – Solving the TDSE for a free electron
+
+```{python}
+H_free = T_op
+
+result_free = qt.sesolve(
+    H_free / hbar,
+    psi0_ket,
+    tlist,
+    e_ops=[x_op, p_op, H_free],
+    #options={"store_states": True}
+    options={"store_states": True, "atol": 1e-10, "rtol": 1e-8, "nsteps": 10000}
+)
+
+x_mean_free = np.real(result_free.expect[0])
+p_mean_free = np.real(result_free.expect[1])
+E_mean_free = np.real(result_free.expect[2])
+```
+
+```{python}
+
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Plot probability densities at selected times
+# ----------------------------------------------------------------------------
+selected_times_fs = [0, 10, 20, 30, 40]
+
+plt.figure()
+for ts_fs in selected_times_fs:
+    idx = np.argmin(np.abs(tlist / fs - ts_fs))
+    psi_t_x = psi_from_ket(result_free.states[idx], dx)
+    plt.plot(
+        x / nm,
+        np.abs(psi_t_x)**2 * nm,
+        label=f"t = {tlist[idx]/fs:.0f} fs"
+    )
+
+plt.xlabel("x (nm)")
+plt.ylabel(r"$|\psi(x,t)|^2$ (1/nm)")
+plt.title("Free-electron TDSE evolution")
+plt.legend()
+plt.show()
+```
+
+```{python}
+# ----------------------------------------------------------------------------
+# Expectation values
+# ----------------------------------------------------------------------------
+
+plt.figure()
+plt.plot(tlist / fs, x_mean_free / nm)
+plt.xlabel("t (fs)")
+plt.ylabel(r"$\langle x \rangle$ (nm)")
+plt.title("Free electron: packet center")
+plt.show()
+
+plt.figure()
+plt.plot(tlist / fs, p_mean_free)
+plt.xlabel("t (fs)")
+plt.ylabel(r"$\langle p \rangle$ (kg m/s)")
+plt.title("Free electron: mean momentum")
+plt.show()
+
+plt.figure()
+plt.plot(tlist / fs, E_mean_free / eV)
+plt.xlabel("t (fs)")
+plt.ylabel(r"$\langle H \rangle$ (eV)")
+plt.title("Free electron: energy conservation")
+plt.show()
+```
+
+## Step 6 – Probability conservation
+
+```{python}
+prob_free = []
+Dx_free = []
+Dp_free = []
+
+for state in result_free.states:
+    psi_t_x = psi_from_ket(state, dx)
+    prob_free.append(grid_probability(psi_t_x, dx))
+    
+    _, Dx_here = expectation_and_std(state, x_op)
+    _, Dp_here = expectation_and_std(state, p_op)
+    
+    Dx_free.append(Dx_here)
+    Dp_free.append(Dp_here)
+
+prob_free = np.array(prob_free)
+Dx_free = np.array(Dx_free)
+Dp_free = np.array(Dp_free)
+
+print("Probability conservation")
+print("------------------------")
+print(f"Minimum probability = {prob_free.min():.8f}")
+print(f"Maximum probability = {prob_free.max():.8f}")
+print(f"Maximum deviation from 1 = {np.max(np.abs(prob_free - 1.0)):.3e}")
+
+plt.figure()
+plt.plot(tlist / fs, prob_free)
+plt.xlabel("t (fs)")
+plt.ylabel(r"$\int |\psi|^2 dx$")
+plt.title("Probability conservation during free evolution")
+plt.show()
+
+plt.figure()
+plt.plot(tlist / fs, Dx_free / nm)
+plt.xlabel("t (fs)")
+plt.ylabel(r"$\Delta x(t)$ (nm)")
+plt.title("Free electron: packet spreading")
+plt.show()
+```
+
+## Step 7 – Ehrenfest theorem for a free electron
+```{r, ech}
+1+1
+```
+
+
+
+```{python, echo=FALSE, eval=TRUE}
+result_free = qt.sesolve(
+    H_free / hbar,
+    psi0_ket,
+    tlist,
+    e_ops=[x_op, p_op, H_free],
+    options={"store_states": True}
+)
+
+x_mean_free = np.real(result_free.expect[0])
+p_mean_free = np.real(result_free.expect[1])
+E_mean_free = np.real(result_free.expect[2])
+
+selected_times_fs = [0, 10, 20, 30, 40]
+
+prob_free = []
+Dx_free = []
+Dp_free = []
+
+for state in result_free.states:
+    psi_t_x = psi_from_ket(state, dx)
+    prob_free.append(grid_probability(psi_t_x, dx))
+    
+    _, Dx_here = expectation_and_std(state, x_op)
+    _, Dp_here = expectation_and_std(state, p_op)
+    
+    Dx_free.append(Dx_here)
+    Dp_free.append(Dp_here)
+
+prob_free = np.array(prob_free)
+Dx_free = np.array(Dx_free)
+Dp_free = np.array(Dp_free)
+```
+
+```{python}
+dxmean_dt_free = np.gradient(x_mean_free, tlist)  # m/s
+dpmean_dt_free = np.gradient(p_mean_free, tlist)  # N
+
+rhs_x_free = p_mean_free / m_e
+rhs_p_free = np.zeros_like(tlist)
+
+err_x_free = dxmean_dt_free - rhs_x_free
+err_p_free = dpmean_dt_free - rhs_p_free
+
+print("Free-electron Ehrenfest check")
+print("-----------------------------")
+print(f"mean |d<x>/dt - <p>/m_e| = {np.mean(np.abs(err_x_free)):.3e} m/s")
+print(f"mean |d<p>/dt - 0|         = {np.mean(np.abs(err_p_free)):.3e} N")
+
+plt.figure()
+plt.plot(tlist / fs, dxmean_dt_free, label=r"$d\langle x \rangle/dt$")
+plt.plot(tlist / fs, rhs_x_free, "--", label=r"$\langle p \rangle/m_e$")
+plt.xlabel("t (fs)")
+plt.ylabel("velocity (m/s)")
+plt.title("Ehrenfest theorem: first equation, free electron")
+plt.legend()
+plt.show()
+
+plt.figure()
+plt.plot(tlist / fs, dpmean_dt_free, label=r"$d\langle p \rangle/dt$")
+plt.plot(tlist / fs, rhs_p_free, "--", label="0")
+plt.xlabel("t (fs)")
+plt.ylabel("force (N)")
+plt.title("Ehrenfest theorem: second equation, free electron")
+plt.legend()
+plt.show()
+```
+
+

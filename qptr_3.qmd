@@ -1,0 +1,269 @@
+---
+title: "Photoelectric Effect (Einstein's Equation)"
+format: pdf
+editor: visual
+---
+
+## Core ideas reproduced here
+
+1. **Threshold frequency**: no emission for $\nu < \nu_0$.
+
+2. **Maximum kinetic energy** varies **linearly** with frequency not intensity (for $\nu \geq \nu_0$).
+
+3. **Photoelectric current** is proportionaly to intensity (qualitative statement).
+
+4. Emission is efectively **instantaneous** (qualitative assesment).
+
+## Einstein's relations
+
+- Photon energy: $E = \hbar\nu$
+
+- Threshold: $\hbar\nu_0 = W$
+
+- Maximum kinetic energy: $K_{\max} = \hbar\nu - W$ (for $\nu >\nu_0$)
+
+- Stopping potential: $eV_0=K_{\max}$
+
+  **Notation**: $\nu$ is frquency, $\nu_0$ is threshold frequency, $W$ is the work function. 
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+ 
+def eV_to_J(E_eV):
+    E_J = E_eV * e
+    return E_J
+
+def J_to_eV(E_J):
+    E_eV = E_J/e
+    return E_eV
+
+def nu_from_lambda(lam_m):
+    nu_hz = c/lam_m    
+    return nu_hz
+
+def lambda_from_nu(nu_hz):
+    lam_m = c/nu_hz
+    return lam_m
+
+print(f"h = {h:.6e} J.s")
+print(f"e = {e:.6e} C")        
+print(f"c = {c:.6e} m/s")
+```
+
+## 1) Einstein photoelectric equation: $K_{\max}(\nu)$ and $V_0(\nu)$
+
+We implement the threshold beahavior explicitly:
+
+- If $\nu < \nu_0$: return 0 (no emission).
+
+- If $\nu > \nu_0$: use Einstein's equation.
+
+Choose a work function $W$ (in eV). Typical values are 2-5 eV depending on the metal.
+
+```{python}
+# Work function 
+W_eV = 2.30
+W = eV_to_J(W_eV)
+
+def nu_threshold(W_J):
+  return W_J / h
+
+def Kmax(nu, W_J):
+  """Kmax = hv - W for v >= v0; otherwise 0 (vectorized)."""
+  nu0 = nu_threshold(W_J)
+  K = h*nu - W_J
+  return np.where(nu > nu0, K, 0.0)
+
+def V0(nu, W_J):
+  """Stopping potential from eV0 = Kmax."""
+  return Kmax(nu, W_J) / e
+
+nu0 = nu_threshold(W)
+lam0 = lambda_from_nu(nu0)
+
+print(f"Work funciton W = {W_eV:.2f} eV")
+print(f"Threshold frequency v0 = {nu0:.3e} Hz")
+print(f"Threshold wavelength $\lambda$0 = {lam0:.3e} m ({lam0*1e9:.1f} nm)")
+```
+
+```{python}
+# Plot V0(v) showing threshold and linear region
+nu_grid = np.linspace(0.4 * nu0, 2.2 * nu0, 600)
+V0_grid = V0(nu_grid, W)
+
+plt.figure()
+plt.plot(nu_grid, V0_grid)
+plt.axvline(nu0, linestyle='--')
+plt.xlabel('Frequency v [Hz]')
+plt.ylabel('Stopping potential V0 [V]')
+plt.title('Einstein photoelectric equation: V0 vs v')
+plt.show()
+```
+
+## 2) Frequency controls energy; intensity controls current
+
+To reproduce point (3) in the representation, we use a simple (toy) model for current:
+
+- Photon flux: $\Phi \propto I/(\hbar\nu)$
+
+- Electron emission rate: $R = \eta\Phi$ for $\nu > \nu_0$; otherwise 0
+
+- Photoelectric current: $I_{photo} = eR$
+
+This is enough to show:
+
+- Current $\propto$ intensity
+
+- $K_{\max}$ does **not** change with intensity (at fixed $\nu$)
+
+```{python}
+def photo_current(intensity, nu, eta, W_J):
+  """Toy photoelectric current model (up to a proportionality constant).
+  
+  intensity: arbitrary units (proportional to actual intensity)
+  nu: frequency [Hz]
+  eta: efficiency-like factor (0..1)
+  
+  Returns current in amperes (arbitrary scale, but consistent)
+  """
+
+  nu0 = nu_threshold(W_J)
+  intensity = np.asarray(intensity)
+  if nu <= nu0:
+    return np.zeros_like(intensity, dtype=float)
+  
+  photon_flux = intensity / (h*nu) # proportional to photons/s⋅m^2 (toy)
+  R = eta * photon_flux            # electrons/s⋅m^2 (toy)
+  return e * R                     # current density scale (toy)
+
+# Choose a frequency above threshold
+nu_fixed = 1.6 * nu0
+eta = 0.2
+intensities = np.linspace(0.0, 10.0, 250)
+
+I_photo = photo_current(intensities, nu_fixed, eta, W)
+
+plt.figure()
+plt.plot(intensities, I_photo)
+plt.xlabel('Intensity (arb. units)')
+plt.ylabel('Photoelectric current (arb. A)')
+plt.title('Photoelectric current vs intensity (v fixed, v > v0)')
+plt.show()
+
+# Kmax does NOT depend on intensity (for fixed v)
+K_fixed = Kmax(nu_fixed, W)
+plt.figure()
+plt.plot(intensities, np.full_like(intensities, J_to_eV(K_fixed)))
+plt.xlabel('Intensity (arb. units)')
+plt.ylabel('Kmax [eV]')
+plt.title('Maximum kinetic energy vs intensity (v fixed)')
+plt.show()
+
+print("At fixed v, Kmax = ", J_to_eV(K_fixed), 
+"eV (constant as intensity changes)")
+```
+
+## 3) "Milikan plot": estimate $\hbar$ from $V_0(v)$ data
+
+Einstein predicts:
+
+$$V_0 = \frac{\hbar}{e}\nu - \frac{W}{e}$$
+
+So the slope is $m = \hbar/e$, and:
+
+- $h_{est} = em$
+
+- $W_{est} = -eb$
+
+Below we generate a small synthetic dataset consistent with this model (plus noise). If you later have real data, replace $\texttt{nu\_data}$ and $\texttt{v0\_data}$.
+
+```{python}
+# Synthetic dataset (you can replace this with real data)
+rng = np.random.default_rng(123)
+
+nu_data = np.array([0.90, 1.00, 1.10, 1.20, 1.30, 1.40]) * nu0 # Hz
+V0_true = V0(nu_data, W)
+
+noise = rng.normal(0.0, 0.2, size=nu_data.shape) # ~20 mV noise
+V0_data = np.clip(V0_true + noise, 0.0, None)
+
+# Linear fit: V0 = m*nu + b
+res = stats.linregress(nu_data, V0_data)
+m = res.slope
+b = res.intercept
+
+h_est = e * m
+W_est_J = -e * b
+W_est_eV = J_to_eV(W_est_J)
+
+percent_error_h = abs(h_est - h) / h * 100
+
+print(f"Fit slope m = {m:.3e} V/Hz (expected h/e ≈ {h/e:.3e})")
+print(f"Fit intercept b = {b:.3e} V (expected -W/e ≈ {-W/e:.3e})")
+print(f"h_est = {h_est:.6e} J⋅s | accepted h = {h:.6e} J⋅s")
+print(f"Percent error in h = {percent_error_h:.2f}%")
+print(f"W_est = {W_est_eV:.3f} eV | chosen W = {W_eV:.3f} eV")
+
+# Plot
+nu_line = np.linspace(nu_data.min()*0.98, nu_data.max()*1.02, 300)
+V0_fit = m * nu_line + b
+
+plt.figure()
+plt.scatter(nu_data, V0_data, label='data')
+plt.plot(nu_line, V0_fit, label='linear fit')
+plt.axvline(nu0, linestyle='--', label='v0')
+plt.xlabel('Frequency v [Hz]')
+plt.ylabel('Stopping potential v0 [V]')
+plt.title('Milikan-style plot: V0 vs v (slope = h/e)')
+plt.legend()
+plt.show()
+```
+
+## 4) Quick numeric checks
+
+We compute:
+
+- Threshold $v_0$ and $\lambda_0$ from $W$
+
+- For a given wavelength $\lambda$, compute $\nu,K_{\max}$ and $\nu_0$
+
+- Given $V_0$ infer $\nu$ and $\lambda$
+
+All results are printed with clear units.
+
+```{python}
+print("A) Threshold values")
+print(f"v0 = {nu0:.3e} Hz")
+print(f"lambda0 = {lam0:.3e} m = {lam0*1e9:.1f} nm")
+print()
+
+# B) Given a wavelength, compute v, Kmax, V0
+lam = 300e-9 # 300 nm
+nu = nu_from_lambda(lam)
+K = Kmax(nu,W)
+V = V0(nu,W)
+
+print("B) For lambda = 300 nm")
+print(f"v = {nu:.3e} Hz")
+print(f"Kmax = {K:.3e} J = {J_to_eV(K):.3f} eV")
+print(f"V0 = {V:.3f} V")
+print()
+
+# C) Given V0, infer v and lambda (for v >= v0)
+V_given = 0.80  # volts
+K_given = V_given * e
+nu_inferred = (K_given + W) / h
+lam_inferred = c / nu_inferred
+
+print("C) For V0 = 0.80 V")
+print(f"Kmax = e V0 = {K_given:.3e} J = {J_to_eV(K_given):.3f} eV")
+print(f"v = {nu_inferred:.3e} Hz")
+print(f"lambda = {lam_inferred:.3e} m = {lam_inferred*1e9:.1f} nm")
+```
+
+
+
+
+

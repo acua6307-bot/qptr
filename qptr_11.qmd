@@ -1,0 +1,816 @@
+---
+title: "Particle in a Potential Well: Infinite and Finite Square Wells"
+format: pdf
+editor: visual
+---
+
+## Step 1 – Imports, constants, and spatial grid
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.linalg import eigh_tridiagonal
+
+plt.rcParams["figure.figsize"] = (9,5)
+plt.rcParams["font.size"] = 11
+
+# Dimensionless units
+hbar = 1.0
+m = 1.0
+
+# Spatial grid
+x_min, x_max = -8.0, 8.0
+N = 800
+x = np.linspace(x_min, x_max, N)
+dx = x[1] - x[0]
+
+# Well half-width
+# The well region is -a < x < a
+a = 2.0
+
+print(f"Grid spacing dx = {dx:.5f}")
+print(f"Number of grid points N = {N}")
+print(f"Well half-width a = {a}")
+```
+
+## Step 2 – Finite-difference Hamiltonian
+
+```{python}
+def hamiltonian_tridiagonal(V, x, hbar=1.0, m=1.0):
+    """Return the main diagonal and off diagonal of the 1D Hamiltonian."""
+    dx = x[1] - x[0]
+    kinetic_diag = hbar**2 / (m * dx**2)
+    kinetic_off = -hbar**2 / (2 * m * dx**2)
+    diag = kinetic_diag + V
+    offdiag = kinetic_off * np.ones(len(x) - 1)
+    return diag, offdiag
+
+def normalize_eigenfunctions(psi, x):
+    """Normalize eigenfunctions so that integral |psi(x)|^2 dx = 1."""
+    psi_norm = psi.copy()
+    
+    for n in range(psi_norm.shape[1]):
+        norm = np.sqrt(np.trapezoid(np.abs(psi_norm[:, n])**2, x))
+        psi_norm[:, n] = psi_norm[:, n] / norm
+        
+    return psi_norm
+
+def solve_schrodinger(V, x, n_states=40, hbar=1.0, m=1.0):
+    """Solve the 1D TISE for the lowest n_states eigenpairs."""
+    diag, offdiag = hamiltonian_tridiagonal(V, x, hbar=hbar, m=m)
+    E, psi = eigh_tridiagonal(diag, offdiag, select="i", 
+    select_range=(0, n_states - 1))
+    psi = normalize_eigenfunctions(psi, x)
+    return E, psi
+
+def plot_potential(x, V, title):
+    plt.figure()
+    plt.plot(x, V, linewidth=2)
+    plt.axvline(-a, linestyle="--", color="gray")
+    plt.axvline(a, linestyle="--", color="gray")
+    plt.xlabel("x")
+    plt.ylabel("V(x)")
+    plt.title(title)
+    plt.grid(True)
+    plt.show()
+```
+
+## Step 3 – Infinite square well
+
+```{python}
+V_wall = 1e5
+V_infinite = np.zeros_like(x)
+V_infinite[np.abs(x) >= a] = V_wall
+
+plot_potential(x, V_infinite, "Numerical infinite square well")
+```
+
+## Step 4 – Eigenstates of the infinite well
+
+```{python}
+n_show = 5
+E_inf, psi_inf = solve_schrodinger(V_infinite, x, n_states=n_show, hbar=hbar, 
+m=m)
+
+L = 2 * a
+n = np.arange(1, n_show + 1)
+E_inf_exact = hbar**2 * np.pi**2 * n**2 / (2 * m * L**2)
+
+df_inf = pd.DataFrame({
+    "n": n,
+    "E numerical": E_inf,
+    "E analytical": E_inf_exact,
+    "relative error": np.abs(E_inf - E_inf_exact) / E_inf_exact
+})
+display(df_inf)
+
+plt.figure(figsize=(10, 6))
+plt.plot(x, V_infinite, "k", alpha=0.25, label="V(x)")
+for j in range(n_show):
+    plt.plot(x, E_inf[j] + 0.8 * psi_inf[:, j], label=f"n={j+1}")
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+plt.xlim(-3, 3)
+plt.ylim(-0.3, E_inf[n_show - 1] + 1.5)
+plt.xlabel("x")
+plt.ylabel("Energy / shifted wave functions")
+plt.title("Infinite well eigenstates")
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## Step 5 – Finite square well, first type
+
+```{python}
+V0 = 20.0
+V_finite_1 = np.zeros_like(x)
+V_finite_1[np.abs(x) >= a] = V0
+
+plot_potential(x, V_finite_1, "Finite square well – first type")
+```
+
+## Step 6 – Bound states of the finite well
+
+```{python}
+E_fin_all, psi_fin_all = solve_schrodinger(V_finite_1, x, n_states=80, 
+hbar=hbar, m=m)
+mask_bound = E_fin_all < V0
+E_bound = E_fin_all[mask_bound]
+psi_bound = psi_fin_all[:, mask_bound]
+
+print("Number of bound states:", len(E_bound))
+print("Bound-state energies:")
+for j, E in enumerate(E_bound, start=1):
+    print(f"state {j:2d}: E = {E:.6f}")
+
+plt.figure(figsize=(10, 6))
+plt.plot(x, V_finite_1, "k", linewidth=2, label="V(x)")
+plt.axhline(V0, linestyle="--", color="gray", label="V0")
+for j in range(min(8, len(E_bound))):
+    plt.plot(x, E_bound[j] + 0.7 * psi_bound[:, j], label=f"{j+1}")
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+plt.xlabel("x")
+plt.ylabel("Energy / shifted wave functions")
+plt.title("Bound states of the finite square well")
+plt.ylim(-1, V0 + 4)
+plt.legend(fontsize=8)
+plt.grid(True)
+plt.show()
+```
+
+## Step 7 – Direct comparison: infinite well vs finite well
+
+```{python}
+E_fin_all, psi_fin_all = solve_schrodinger(V_finite_1, x, n_states=80, 
+hbar=hbar, m=m)
+mask_bound = E_fin_all < V0
+E_bound = E_fin_all[mask_bound]
+psi_bound = psi_fin_all[:, mask_bound]
+
+print("Number of bound states:", len(E_bound))
+print("Bound-state energies:")
+for j, E in enumerate(E_bound, start=1):
+    print(f"state {j:2d}: E = {E:.6f}")
+
+plt.figure(figsize=(10, 6))
+plt.plot(x, V_finite_1, "k", linewidth=2, label="V(x)")
+plt.axhline(V0, linestyle="--", color="gray", label="V0")
+for j in range(min(8, len(E_bound))):
+    plt.plot(x, E_bound[j] + 0.7 * psi_bound[:, j], label=f"{j+1}")
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+plt.xlabel("x")
+plt.ylabel("Energy / shifted wave functions")
+plt.title("Bound states of the finite square well")
+plt.ylim(-1, V0 + 4)
+plt.legend(fontsize=8)
+plt.grid(True)
+plt.show()
+```
+
+## Step 8 – Probability inside and outside the finite well
+
+```{python}
+# Regions of the finite well
+inside = np.abs(x) < a
+left_barrier = x <= -a
+right_barrier = x >= a
+
+rows = []
+
+for j in range(len(E_bound)):
+    psi_j = psi_bound[:, j]
+    
+    # Probability inside the well: -a < x < a
+    P_inside = np.trapezoid(
+        np.abs(psi_j[inside])**2,
+        x[inside]
+    )
+    
+    # Probability in the left barrier: x <= -a
+    P_left = np.trapezoid(
+        np.abs(psi_j[left_barrier])**2,
+        x[left_barrier]
+    )
+    
+    # Probability in the right barrier: x >= a
+    P_right = np.trapezoid(
+        np.abs(psi_j[right_barrier])**2,
+        x[right_barrier]
+    )
+    
+    # Total probability outside the well
+    P_outside = P_left + P_right
+    
+    rows.append({
+        "state": j + 1,
+        "energy": E_bound[j],
+        "P_inside": P_inside,
+        "P_outside": P_outside,
+        "P_total": P_inside + P_outside
+    })
+
+df_pen = pd.DataFrame(rows)
+display(df_pen)
+
+plt.figure(figsize=(7, 4))
+plt.bar(df_pen["state"], df_pen["P_outside"])
+plt.xlabel("State index")
+plt.ylabel(r"$P_{\mathrm{outside}}$")
+plt.title("Probability in the barrier regions")
+plt.grid(True, axis="y")
+plt.show()
+```
+
+## Step 9 – Effect of barrier height $V_0$
+
+```{python}
+V0_values = np.array([2, 5, 10, 20, 50, 100], dtype=float)
+summary = []
+
+# Define the well and barrier regions
+inside_region = np.abs(x) < a
+left_barrier = x <= -a
+right_barrier = x >= a
+
+for V0_i in V0_values:
+    # First-type finite square well:
+    # V(x) = 0 inside the well, V0 outside
+    V_i = np.zeros_like(x)
+    V_i[np.abs(x) >= a] = V0_i
+
+    # Solve the TISE
+    E_i_all, psi_i_all = solve_schrodinger(
+        V_i,
+        x,
+        n_states=100,
+        hbar=hbar,
+        m=m
+    )
+
+    # Bound states for the first-type convention satisfy E < V0
+    mask_i = E_i_all < V0_i
+    E_i = E_i_all[mask_i]
+    psi_i = psi_i_all[:, mask_i]
+
+    # Ground-state barrier penetration
+    P_out_g = np.nan
+
+    if len(E_i) > 0:
+        psi_g = psi_i[:, 0]
+
+        P_left = np.trapezoid(
+            np.abs(psi_g[left_barrier])**2,
+            x[left_barrier]
+        )
+
+        P_right = np.trapezoid(
+            np.abs(psi_g[right_barrier])**2,
+            x[right_barrier]
+        )
+
+        P_out_g = P_left + P_right
+
+    summary.append({
+        "V0": V0_i,
+        "bound states": len(E_i),
+        "ground energy": E_i[0] if len(E_i) else np.nan,
+        "ground P_outside": P_out_g
+    })
+
+df_V0 = pd.DataFrame(summary)
+display(df_V0)
+
+plt.figure(figsize=(7, 4))
+plt.plot(df_V0["V0"], df_V0["bound states"], "o-", linewidth=2)
+plt.xlabel(r"$V_0$")
+plt.ylabel("Number of bound states")
+plt.title("Bound-state count vs barrier height")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(7, 4))
+plt.plot(df_V0["V0"], df_V0["ground P_outside"], "o-", linewidth=2)
+plt.xlabel(r"$V_0$")
+plt.ylabel(r"Ground-state $P_{\mathrm{outside}}$")
+plt.title("Ground-state penetration vs barrier height")
+plt.grid(True)
+plt.show()
+```
+
+## Step 10 – Parity classification
+
+```{python}
+def classify_parity(psi, x):
+    """
+    Classify a normalized eigenfunction by comparing psi(x) with psi(-x).
+
+    For an even function:
+        psi(-x) = psi(x) -> overlap ≈ +1
+
+    For an odd function:
+        psi(-x) = -psi(x) -> overlap ≈ -1
+    """
+    overlap = np.trapezoid(psi * psi[::-1], x)
+
+    parity = "even" if overlap > 0 else "odd"
+
+    return parity, overlap
+
+def count_nodes_inside(psi, x, a):
+    """
+    Approximate the number of nodes inside the well by counting sign changes.
+
+    Small numerical values close to zero are removed using a threshold to 
+    avoid counting numerical noise as physical nodes.
+    """
+    region = np.abs(x) < a
+    y = psi[region]
+
+    threshold = 1e-3 * np.max(np.abs(y))
+    y = y[np.abs(y) > threshold]
+
+    signs = np.sign(y)
+
+    return int(np.sum(signs[1:] * signs[:-1] < 0))
+
+rows = []
+
+for j in range(len(E_bound)):
+    parity, overlap = classify_parity(psi_bound[:, j], x)
+
+    rows.append({
+        "state": j + 1,
+        "energy": E_bound[j],
+        "parity": parity,
+        "parity overlap": overlap,
+        "nodes inside well": count_nodes_inside(psi_bound[:, j], x, a)
+    })
+
+df_parity = pd.DataFrame(rows)
+display(df_parity)
+
+plt.figure(figsize=(10, 7))
+
+for j in range(min(6, len(E_bound))):
+    plt.plot(
+        x,
+        psi_bound[:, j] + 1.4*j,
+        label=f"{j+1}: {df_parity.loc[j, 'parity']}"
+    )
+
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+
+plt.xlim(-5, 5)
+plt.xlabel("x")
+plt.ylabel("Shifted eigenfunctions")
+plt.title("Parity of finite-well eigenfunctions")
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## Step 11 – First type vs second type
+
+```{python}
+V_finite_2 = V_finite_1 - V0
+
+E2_all, psi2_all = solve_schrodinger(
+    V_finite_2,
+    x,
+    n_states=80,
+    hbar=hbar,
+    m=m
+)
+
+# Bound states in the second-type convention satisfy E < 0
+mask2 = E2_all < 0
+E_bound_2 = E2_all[mask2]
+psi_bound_2 = psi2_all[:, mask2]
+
+n_cmp = min(len(E_bound), len(E_bound_2))
+
+rows = []
+
+for j in range(n_cmp):
+    # Wave functions can differ by an overall sign.
+    # Therefore, we compare the absolute value of the overlap.
+    overlap = np.trapezoid(
+        psi_bound[:, j] * psi_bound_2[:, j],
+        x
+    )
+
+    overlap_abs = abs(overlap)
+
+    rows.append({
+        "state": j + 1,
+        "E first": E_bound[j],
+        "E second": E_bound_2[j],
+        "E first - V0": E_bound[j] - V0,
+        "shift error": E_bound_2[j] - (E_bound[j] - V0),
+        "|wavefunction overlap|": overlap_abs
+    })
+
+df_shift = pd.DataFrame(rows)
+display(df_shift)
+
+plt.figure(figsize=(8, 4))
+plt.plot(x, V_finite_1, label="first type")
+plt.plot(x, V_finite_2, label="second type")
+
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+
+plt.xlabel("x")
+plt.ylabel("V(x)")
+plt.title("First-type and second-type finite wells")
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## Step 12 – Superposition of two finite-well eigenstates
+
+```{python}
+psi_1 = psi_bound[:, 0]
+psi_2 = psi_bound[:, 1]
+E_1 = E_bound[0]
+E_2 = E_bound[1]
+
+c1 = 1/np.sqrt(2)
+c2 = 1/np.sqrt(2)
+
+def Psi_t(t):
+    c11 = c1 * psi_1 * np.exp(-1j * E_1 * t / hbar)
+    c22 = c2 * psi_2 * np.exp(-1j * E_2 * t / hbar)
+    return c11 + c22
+
+plt.figure(figsize=(10, 6))
+for t in [0, 1, 2, 3, 4, 5]:
+    density = np.abs(Psi_t(t))**2
+    plt.plot(x, density, label=f"t={t}")
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+plt.xlim(-5, 5)
+plt.xlabel("x")
+plt.ylabel(r"$|\Psi(x,t)|^2$")
+plt.title("Superposition dynamics in the finite well")
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## Step 13 – Expectation value of position
+
+```{python}
+def expectation_x(t):
+    """
+    Compute the expectation value <x>(t).
+
+    <x>(t) = integral x |Psi(x,t)|^2 dx
+    """
+    density = np.abs(Psi_t(t))**2
+
+    return np.trapezoid(x * density, x)
+
+t_values = np.linspace(0, 30, 400)
+x_exp = np.array([expectation_x(t) for t in t_values])
+
+plt.figure(figsize=(7, 4))
+plt.plot(t_values, x_exp, linewidth=2)
+plt.xlabel("t")
+plt.ylabel(r"$\langle x \rangle(t)$")
+plt.title("Expectation value of position")
+plt.grid(True)
+plt.show()
+
+print("E1 =", E_1)
+print("E2 =", E_2)
+print("Energy difference E2 - E1 =", E_2 - E_1)
+print("Expected angular frequency omega = (E2 - E1)/hbar =", (E_2 - E_1)/hbar)
+```
+
+## Step 14 – Student challenge problem
+
+### Step 1 – Scan candidate well depths $V_0$
+
+```{python}
+# 1. Define the second-type potential
+def second_type_potential(V0, x, a):
+    V = np.zeros_like(x)
+    V[np.abs(x) < a] = -V0
+    return V
+
+# 2. Count the bound states of a given well depth V0 
+def count_second_type_states(V0, x, a, n_states=80):
+    V = second_type_potential(V0, x, a)
+    E, psi = solve_schrodinger(V, x, n_states=n_states, hbar=hbar, m=m)
+    
+    # Identify bound sttates using the condition E < 0
+    bound_mask = E < 0
+    N_bound = np.sum(bound_mask)
+    
+    return N_bound, E, psi, V
+
+# ============================================================================
+# Step 1 – Scan candidate well depths V0 
+# ============================================================================
+
+V0_trial_values = np.linspace(0.5, 20.0, 100)
+scan_rows = []
+
+for V0_try in V0_trial_values:
+    N_bound, E, psi, V = count_second_type_states(V0_try, x, a)
+    E_lowest = E[0]  # Lowest computed energy E_0
+    
+    scan_rows.append({
+        "V0": V0_try,
+        "bound states": N_bound,
+        "lowest energy": E_lowest
+    })
+
+df_scan = pd.DataFrame(scan_rows)
+
+print("Scan of trial well depths:")
+display(df_scan)
+```
+
+### Step 2 – Plot number of bound states vs $V_0$
+
+```{python}
+# ============================================================================
+# Step 2 – Plot number of bound states vs V0
+# ============================================================================
+
+plt.figure(figsize=(8, 5))
+
+# Step plot using df_scan
+# 'where="post"' ensures step ocurs when new state appears
+plt.step(df_scan["V0"], df_scan["bound states"], where="post", linewidth=2.5)
+
+# Label the axes and title
+plt.xlabel(r"$V_0$")
+plt.ylabel("Number of bound states")
+plt.title("Challenge scan: bound-state count vs well depth")
+
+# Grid
+plt.grid(True)
+
+# Display
+plt.show()
+```
+
+### Step 3 – Select a value of V0 with exactly three bound states
+
+```{python}
+# ============================================================================
+# Step 3 – Select a value of V0 with exactly three bound states
+# ============================================================================
+
+# 1. Select only the rows where the number of bound states is euqal to three
+df_three = df_scan[df_scan["bound states"] == 3]
+
+# Display
+print("Candidate values of V0 with exactly three bound states:")
+display(df_three)
+
+# 2. Increase the scan range if no candidate value is found
+if not df_three.empty:
+    V0_solution = df_three.iloc[0]["V0"]
+    print(f"Selected well depth:")
+    print(f"V0_solution = {V0_solution}")
+    print("This value produces exactly three bound states in the scan.")
+else:
+    print("No candidate found. Consider adjusting the scan range or spacing.")
+```
+
+### Step 4 – Solve the selected second-type well
+
+```{python}
+# ============================================================================
+# Step 4 – Solve the selected second-type well
+# ============================================================================
+
+# 1. Use selected value V0_solution, build the second-type finite square well
+V_solution = second_type_potential(V0_solution, x, a)
+
+# 2. Solve time-independent Schrödinger equation numerically
+E_sol_all, psi_sol_all = solve_schrodinger(V_solution, x, n_states=80, 
+hbar=hbar, m=m)
+
+# 3. Keep only bound states which satisfy E < 0 
+mask_sol_bound = E_sol_all < 0
+E_bound_sol = E_sol_all[mask_sol_bound]
+psi_bound_sol = psi_sol_all[:, mask_sol_bound]
+
+# 4. Confirm expected well has exactly three bound states and print energies
+print(f"Number of bound states for the selected well: {len(E_bound_sol)}")
+print("Bound-state energies:")
+for j, E in enumerate(E_bound_sol, start=1):
+    print(f"state {j}: E = {E:.6f}")
+```
+
+### Step 5 – Define spatial regions for probability calculations
+
+```{python}
+# ============================================================================
+# Step 5 – Define spatial regions for probability calculations
+# ============================================================================
+
+# 1. Divide the spatial grid into three regions
+inside = np.abs(x) < a # region inside the well
+left_barrier = x <= -a # left barrier region
+right_barrier = x >= a # right barrier region
+
+print("Regions defined successfully:")
+print(f"Grid points inside the well: {np.sum(inside)}")
+print(f"Grid points in the left barrier: {np.sum(left_barrier)}")
+print(f"Grid points in the right barrier: {np.sum(right_barrier)}")
+```
+
+### Step 6 – Build table of energies, parity, and probabilities
+
+```{python}
+# ============================================================================
+# Step 6 – Build table of energies, parity, and probabilities
+# ============================================================================
+
+rows = []
+
+for j in range(len(E_bound_sol)):
+    # 1. Select the eigen function
+    psi_j = psi_bound_sol[:, j]
+    
+    # 2. Clasify its parity 
+    parity, overlap = classify_parity(psi_j, x)
+    
+    # 3. Compute probability inside the well
+    P_inside = np.trapezoid(np.abs(psi_j[inside])**2, x[inside])
+    
+    # 4. Compute probability in the left barrier
+    P_left = np.trapezoid(np.abs(psi_j[left_barrier])**2, x[left_barrier])
+    
+    # 5. Compute probability in the right barrier
+    P_right = np.trapezoid(np.abs(psi_j[right_barrier])**2, x[right_barrier])
+    
+    # 6. Compute the total probability outside the well
+    P_outside = P_left + P_right
+    
+    # 7. Check the normalization
+    P_total = P_inside + P_outside
+    
+    # 6. Sotre results in table
+    rows.append({
+        "state": j + 1,
+        "energy": E_bound_sol[j],
+        "parity": parity,
+        "parity overlap": overlap,
+        "P_inside": P_inside,
+        "P_left": P_left,
+        "P_right": P_right,
+        "P_outside": P_outside,
+        "P_total": P_total
+    })
+
+# Display
+df_challenge_properties = pd.DataFrame(rows)
+print("Bound-state properties for the selected second-type well:")
+display(df_challenge_properties)
+```
+
+### Step 7 – Plot selected potential and shifted bound-state wave functions
+
+```{python}
+# ============================================================================
+# Step 7 – Plot selected potential and shifted bound-state wave functions
+# ============================================================================
+
+plt.figure(figsize=(10, 6))
+
+# 1. Plot the potential V(x) as a function of x
+plt.plot(x, V_solution, "b-", linewidth=1.5, label="V(x)")
+
+# 2. Draw horizontal dashed line at E = 0 representing the continuum threshold
+plt.axhline(0, linestyle="--", color="gray", 
+label="continuum threshold E = 0")
+
+# 3. Plot a shifted wave function
+for j in range(len(E_bound_sol)):
+    E_j = E_bound_sol[j]
+    psi_j = psi_bound_sol[:, j]
+    parity_j = df_challenge_properties.loc[j, "parity"]
+    
+    # scale factor used for visualization
+    plt.plot(
+        x,
+        E_j + 0.6 * psi_j,
+        label=f"state {j+1}, E={E_j:.3f}, {parity_j}"
+    )
+
+# 4. Draw vertical dashed lines 
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+
+# 5. Add labels
+plt.xlabel("x")
+plt.ylabel("Energy / shifted wave functions")
+
+# 6. Title
+plt.title(f"Second-type finite well with exactly three bound states\n$V_0 = {V0_solution:.3f}$")
+
+# 7. Legend
+plt.legend(fontsize=8, loc="lower right")
+
+# 8. Grid
+plt.grid(True)
+
+# 9. Display
+plt.show()
+```
+
+### Step 8 – Plot probability densities of the three bound states
+
+```{python}
+# ============================================================================
+# Step 8 – Plot probability densities of the three bound states
+# ============================================================================
+
+plt.figure(figsize=(10, 6))
+
+# 1. & 2. Probabilidty densities |psi_n(x)|^2 for each bound-state
+for j in range(len(E_bound_sol)):
+    E_j = E_bound_sol[j]
+    psi_j = psi_bound_sol[:, j]
+    prob_density = np.abs(psi_j)**2
+    parity_j = df_challenge_properties.loc[j, "parity"]
+    
+    # 3. Separate curve for each state with label
+    plt.plot(
+        x,
+        prob_density,
+        label=f"state {j+1}, E={E_j:.3f}, {parity_j}"
+    )
+
+# 4. Draw vertical dashed lines
+plt.axvline(-a, linestyle="--", color="gray")
+plt.axvline(a, linestyle="--", color="gray")
+
+# 5. Label the axes
+plt.xlabel("x")
+plt.ylabel(r"$|\psi_n(x)|^2$")
+
+# 6. Title
+plt.title("Challenge solution: probability densities")
+
+# 7. Legend, 8. Grid & 9. Display
+plt.legend(fontsize=8, loc="upper right")
+plt.grid(True)
+plt.show()
+```
+
+### Step 9 – Final printed interpretation guide
+
+```{python}
+# ============================================================================
+# Step 9 – Final printed interpretation guide
+# ============================================================================
+
+# Find state with the largest outside probability (P_outside)
+max_outside_idx = df_challenge_properties["P_outside"].idxmax()
+state_max_outside = df_challenge_properties.loc[max_outside_idx, "state"]
+
+print("Challenge summary:")
+print(f" - Selected well depth: V0 = {V0_solution:.6f}")
+print(f" - Number of bound states: {len(E_bound_sol)}")
+print(" - Bound states satisfy E < 0 in the second-type convention.")
+print(" - P_total should be close to 1 for each normalized eigenfunction.")
+print(" - The state with the largest P_outside "
+      "has the strongest barrier penetration.")
+print(f" - The largest barrier penetration "
+      f"occurs for state {int(state_max_outside)}.")
+```
+

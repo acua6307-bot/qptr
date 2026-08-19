@@ -1,0 +1,26 @@
+# R / RStudio
+.RData
+.Rhistory
+.Ruserdata
+.Rproj.user/
+
+# Posit
+.posit/
+
+# Quarto generated output
+*.html
+*_files/
+
+# Generated PDF output
+qptr_*.pdf
+
+# Research papers / local reference library
+RS/
+RS2/
+
+# LibreOffice lock files
+.~lock.*
+
+# OS files
+.DS_Store
+Thumbs.db
