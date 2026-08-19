@@ -198,10 +198,10 @@ print(f"QuTiP ket norm (should be ~1): {ket_norm:.6e}")
 
 # Save initial psi plot
 plt.figure(figsize=(8,4))
-plt.plot(x*1e9, np.abs(psi0)**2, label=r'$|\psi(x,0)|^2$')
+plt.plot(x*1e9, np.abs(psi0)**2, label=r'$|\\psi(x,0)|^2$')
 plt.plot(x*1e9, V_x / V0 * np.max(np.abs(psi0)**2), '--', label='Barrier (scaled)')
 plt.xlabel('x (nm)')
-plt.ylabel(r'$|\psi|^2$ (a.u.)')
+plt.ylabel(r'$|\\psi|^2$ (a.u.)')
 plt.title('Initial Gaussian wave packet and barrier (scaled)')
 plt.legend()
 plt.tight_layout()
@@ -237,6 +237,123 @@ print(f"t_final = {t_final:.3e} s with {n_t} steps")
 # Evolve using QuTiP sesolve
 result = sesolve(H_qobj, ket0, tlist)
 
+# --- Diagnostic block: check whether the state actually changes during evolution ---
+# Compute ket norms, overlaps, max spatial differences, expectations, operator scales, and state uniqueness
+try:
+    ket_initial = ket0
+    ket_final = result.states[-1]
+    # 1. Norm of difference between initial and final kets
+    ket_diff_norm = (ket_final - ket_initial).norm()
+    print(f"Norm of ket difference ||psi(t_final)-psi(0)|| = {ket_diff_norm:.6e}")
+
+    # 2. Overlap <psi(0)|psi(t_final)>
+    overlap = (ket_initial.dag() * ket_final).full()[0,0]
+    print(f"Overlap <psi(0)|psi(t_final)> = {overlap} (abs={abs(overlap):.6e})")
+
+    # 3. Max absolute difference between initial and final spatial wavefunctions
+    psi_initial = psi_from_ket(ket_initial, dx)
+    psi_final = psi_from_ket(ket_final, dx)
+    max_abs_diff = np.max(np.abs(psi_final - psi_initial))
+    print(f"Max |psi(x,t_final) - psi(x,0)| = {max_abs_diff:.6e}")
+
+    # 4. Expectation value of position at selected times
+    times_idx = [0, int(0.25*(n_t-1)), int(0.5*(n_t-1)), int(0.75*(n_t-1)), n_t-1]
+    exp_x = []
+    exp_p = []
+    maxpos = []
+
+    # Construct finite-difference momentum operator (central difference)
+    off = 0.5 / dx
+    D1 = diags([-off, np.zeros(N), off], offsets=[-1,0,1], shape=(N,N), format='csr')
+    p_mat = -1j * hbar * D1
+    p_qobj = Qobj(p_mat)
+
+    for idx in times_idx:
+        ket_t = result.states[idx]
+        psi_t = psi_from_ket(ket_t, dx)
+        # expectation x = integral x |psi|^2 dx
+        ex = np.sum(x * (np.abs(psi_t)**2)) * dx
+        exp_x.append(ex)
+        # expectation p via operator in ket basis (use Qobj expectation)
+        try:
+            p_expect = (ket_t.dag() * p_qobj * ket_t).full()[0,0]
+        except Exception as e:
+            p_expect = None
+        exp_p.append(p_expect)
+        # position of maximum probability density
+        maxpos_idx = np.argmax(np.abs(psi_t)**2)
+        maxpos.append(x[maxpos_idx])
+
+    # Print expectation values with time stamps
+    print('\nExpectation values at selected times:')
+    for t_idx, tx in zip(times_idx, tlist[times_idx]):
+        print(f" t = {tx:.6e} s ({tx*1e12:.3f} ps)")
+    print('\n <x> (m):', exp_x)
+    print('\n <p> (SI units, complex allowed):', exp_p)
+    print('\n Position of max |psi|^2 (m):', maxpos)
+
+    # 7. Hamiltonian energy scales
+    Vmin = float(np.min(V_x))
+    Vmax = float(np.max(V_x))
+    print(f"Potential V(x): min = {Vmin:.6e} J, max = {Vmax:.6e} J")
+
+    # Representative kinetic-energy scale from diagonal of T_mat
+    try:
+        Tdiag = T_mat.diagonal()
+        Tdiag_min = np.min(Tdiag)
+        Tdiag_max = np.max(Tdiag)
+        print(f"Kinetic operator diagonal: min = {Tdiag_min:.6e}, max = {Tdiag_max:.6e}")
+    except Exception as e:
+        print('Could not read kinetic operator diagonal:', e)
+
+    # Smallest/largest eigenvalues (if practical)
+    eigvals = None
+    try:
+        # Use sparse eigensolver to get smallest and largest algebraic eigenvalues
+        ksmall = 6
+        if N <= 3000:
+            # compute few smallest
+            eig_small, _ = spla.eigsh(H_mat, k=ksmall, which='SA')
+            eig_large, _ = spla.eigsh(H_mat, k=ksmall, which='LA')
+            print(f"Smallest eigenvalues (J): {eig_small}")
+            print(f"Largest eigenvalues (J): {eig_large}")
+            eigvals = np.concatenate([eig_small, eig_large])
+    except Exception as e:
+        print('Eigenvalue computation not practical:', e)
+
+    # Operator norm: approximate via largest magnitude eigenvalue if available
+    op_norm = None
+    try:
+        if eigvals is not None:
+            op_norm = np.max(np.abs(eigvals))
+            print(f"Approx operator norm (max |eig|) = {op_norm:.6e}")
+        else:
+            # fallback: infinity norm of matrix
+            Hdense = H_mat.toarray() if sp.issparse(H_mat) else np.array(H_mat)
+            op_norm = la.norm(Hdense, ord=np.inf)
+            print(f"Operator matrix infinity norm = {op_norm:.6e}")
+    except Exception as e:
+        print('Could not compute operator norm:', e)
+
+    # 8. Print actual time values for snapshots (s and ps)
+    print('\nSnapshot times:')
+    for idx in times_idx:
+        tval = float(tlist[idx])
+        print(f" index {idx}: t = {tval:.6e} s = {tval*1e12:.3f} ps")
+
+    # 9. Verify distinctness of result.states
+    n_states = len(result.states)
+    same01_norm = (result.states[0] - result.states[-1]).norm()
+    print(f"Number of states returned by sesolve: {n_states}")
+    print(f"Norm of difference between result.states[0] and result.states[-1]: {same01_norm:.6e}")
+    identical_states = np.isclose(same01_norm, 0.0)
+    print(f"Are states[0] and states[-1] numerically identical (isclose)? {identical_states}")
+
+except Exception as diag_e:
+    print('Diagnostic block failed with exception:', diag_e)
+
+# --- End diagnostic block ---
+
 # Extract psi(x,t) at selected snapshot indices
 snap_indices = [0, int(0.25*(n_t-1)), int(0.5*(n_t-1)), int(0.75*(n_t-1)), n_t-1]
 
@@ -246,7 +363,7 @@ for ax, idx in zip(axes, snap_indices):
     psi_t = psi_from_ket(ket_t, dx)
     ax.plot(x*1e9, np.abs(psi_t)**2, color='C0')
     ax.plot(x*1e9, V_x / V0 * np.max(np.abs(psi_t)**2), '--', color='C3', label='Barrier (scaled)')
-    ax.set_ylabel(r'$|\psi(x,t)|^2$ (a.u.)')
+    ax.set_ylabel(r'$|\\psi(x,t)|^2$ (a.u.)')
     ax.legend()
 axes[-1].set_xlabel('x (nm)')
 plt.suptitle('Snapshots of |psi(x,t)|^2 during scattering')
@@ -451,5 +568,3 @@ validation_df.to_csv('figures/single_barrier_validation_summary.csv', index=Fals
 
 
 # End of notebook
-
-
